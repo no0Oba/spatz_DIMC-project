@@ -1249,6 +1249,62 @@ module spatz_decoder
             default;
           endcase
         end
+        
+         // DIMC INSTRUCTION HERE
+         
+          // Example: DIMC variants (I-type style immediate)
+          riscv_instr::DIMC_INSTR_LD_F,
+          riscv_instr::DIMC_INSTR_LD_K,
+          riscv_instr::DIMC_INSTR_DPS,
+          riscv_instr::DIMC_INSTR_DSS: begin 
+
+          // decode standard I-type fields
+          automatic logic [11:0] imm12 = decoder_req_i.instr[31:20];    // 12-bit immediate
+          automatic logic [4:0]  rs1   = decoder_req_i.instr[19:15];    // source (here: VRF row index)
+          automatic logic [2:0]  funct3= decoder_req_i.instr[14:12];
+          automatic logic [4:0]  rd    = decoder_req_i.instr[11:7];
+
+          // Common request setup for DIMC
+          spatz_req.op       = DIMC_OP;        // you may keep the single DIMC_OP and use subfields below
+          spatz_req.ex_unit  = VFU;            // existing placeholder used VFU; adjust if you implement a dedicated unit
+          spatz_req.rd       = rd;
+          spatz_req.use_rd   = 1'b0;           // set to 1 if rd should be written back
+          spatz_req.rs1      = rs1;            // row index of VRF (0..31) — use this to pick the VRF row
+          spatz_req.vtype.vsew = EW_32;        // set element width as appropriate for your DIMC op
+
+          // subfields: interpret imm12 bits to encode arguments (example layout)
+          // (You must pick a layout consistent with your .insn encoding.)
+          // Example encoding (one possibility):
+          //   imm12[4:0] = k_row (5 bits)         -> k_row = 5 -> imm12[4:0] = 5
+          //   imm12[6:5] = sec  (2 bits)         -> sec = 2 -> imm12[6:5] = 2
+          //   imm12[11:7] = reserved / small addr or flags
+          spatz_req.op_cfg.dimc.k_row = imm12[4:0];   // k-row
+          spatz_req.op_cfg.dimc.sec   = imm12[6:5];   // section / sec value
+          spatz_req.op_cfg.dimc.flags = imm12[11:7];  // extra flags / address nibble (if needed)
+
+          // Variant-specific tweaks using casez (similar style to DIV/REM decode)
+          unique casez (decoder_req_i.instr)
+            riscv_instr::DIMC_INSTR_LD_K: begin
+              spatz_req.op_cfg.dimc.cmd = DIMC_CMD_LD_K;
+              spatz_req.use_rd          = 1'b0; // LD_K likely doesn’t write integer rd
+            end
+
+            riscv_instr::DIMC_INSTR_LD_F: begin
+              spatz_req.op_cfg.dimc.cmd = DIMC_CMD_LD_F;
+            end
+
+            riscv_instr::DIMC_INSTR_DPS: begin
+              spatz_req.op_cfg.dimc.cmd = DIMC_CMD_DPS;
+            end
+
+            default: begin
+              spatz_req.op_cfg.dimc.cmd = DIMC_CMD_DSS;
+            end
+          endcase
+          // any additional fields required by your DIMC execution unit:
+          // - if DIMC needs an effective address or extra register, set spatz_req.rs2 or spatz_req.rsD
+          // - set spatz_req.op_cfg.reset_vstart = 1'b0; if you want to preserve vstart
+          end
 
         // Scalar division
         riscv_instr::DIV,

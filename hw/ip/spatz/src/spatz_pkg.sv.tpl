@@ -148,7 +148,9 @@ package spatz_pkg;
     VFADD, VFSUB, VFMUL,
     VFMINMAX, VFSGNJ, VFCMP, VFCLASS,
     VF2I, VF2U, VI2F, VU2F, VF2F,
-    VFMADD, VFMSUB, VFNMSUB, VFNMADD, VSDOTP
+    VFMADD, VFMSUB, VFNMSUB, VFNMADD, VSDOTP, 
+    // DIMC load
+    DIMC_OP
   } op_e;
 
   // Execution units
@@ -167,12 +169,34 @@ package spatz_pkg;
   // Spatz request //
   ///////////////////
 
+  // ------------------------
+  // DIMC config / commands
+  // ------------------------
+  // DIMC command encoding used by decoder (values must match decoder writes)
+  typedef enum logic [1:0] {
+    DIMC_CMD_LD_K = 2'd0,
+    DIMC_CMD_LD_F = 2'd1,
+    DIMC_CMD_DPS  = 2'd2,
+    DIMC_CMD_DSS  = 2'd3
+  } dimc_cmd_e;
+
+  // Per-instruction DIMC configuration carried through spatz_req.op_cfg.dimc
+  typedef struct packed {
+    logic [4:0]    k_row;   // imm[4:0] (adjust if your imm slices differ)
+    logic [1:0]    sec;     // imm[6:5]
+    logic [4:0]    flags;   // imm[11:7] (extra flags / small immediate)
+    dimc_cmd_e     cmd;     // command variant (LD_K / LD_F / DPS / DSS)
+  } dimc_cfg_t;
+
   typedef struct packed {
     logic keep_vl;
     logic write_vstart;
     logic set_vstart;
     logic clear_vstart;
     logic reset_vstart;
+    
+    // Per-accelerator / op specific sub-configs
+    dimc_cfg_t dimc;   // DIMC configuration (decoder writes into these fields)
   } op_cfg_t;
 
   typedef struct packed {
@@ -238,6 +262,9 @@ package spatz_pkg;
     op_e op;
     ex_unit_e ex_unit;
 
+    // Mode (used by VFU/DIMC to select element/bit resolution, etc.)
+    logic [1:0] mode;
+    
     // Operation specific details
     op_cfg_t op_cfg;
     op_csr_t op_csr;

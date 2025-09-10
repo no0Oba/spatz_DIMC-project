@@ -1,4 +1,4 @@
-// Copyright 2020 ETH Zurich and University of Bologna.
+// Copyght 2020 ETH Zurich and University of Bologna.
 // Solderpad Hardware License, Version 0.51, see LICENSE for details.
 // SPDX-License-Identifier: SHL-0.51
 
@@ -2435,6 +2435,25 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           illegal_inst = 1'b1;
         end
       end
+      // 1 source register (rs1)
+      riscv_instr::DIMC_INSTR_LD_F,
+      riscv_instr::DIMC_INSTR_LD_K,
+      riscv_instr::DIMC_INSTR_DPS,
+      riscv_instr::DIMC_INSTR_DSS: begin
+        if (RVV) begin
+       // keep scalar rd disabled — DIMC writes/read accelerator, not scalar reg
+          write_rd        = 1'b0;
+          uses_rd         = 1'b0;
+
+          // forward as accelerator command (reuse acc_qvalid_o if present)
+          acc_qvalid_o    = valid_instr;   // existing valid for accelerator request
+          acc_register_rd = 1'b0;
+          opa_select      = Reg;
+        end else begin
+          illegal_inst = 1'b1;
+        end
+      end
+
       // 1 source register (rs1)
       riscv_instr::VADD_VX,
       riscv_instr::VSUB_VX,

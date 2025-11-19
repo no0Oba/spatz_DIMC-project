@@ -177,7 +177,7 @@ package spatz_pkg;
     DIMC_CMD_LD_K = 2'd0,
     DIMC_CMD_LD_F = 2'd1,
     DIMC_CMD_DPS  = 2'd2,
-    DIMC_CMD_DSS  = 2'd3
+    DIMC_CMD_DSS  = 2'd3 
   } dimc_cmd_e;
 
   // Per-instruction DIMC configuration carried through spatz_req.op_cfg.dimc
@@ -272,7 +272,7 @@ package spatz_pkg;
     op_mem_t op_mem;
     op_sld_t op_sld;
 
-    // Spatz config details
+    // Spatz config details 
     vtype_t vtype;
     vlen_t vl;
     vlen_t vstart;

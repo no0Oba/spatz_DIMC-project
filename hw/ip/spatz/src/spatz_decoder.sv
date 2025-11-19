@@ -1265,7 +1265,7 @@ module spatz_decoder
           automatic logic [4:0]  rd    = decoder_req_i.instr[11:7];
 
           // Common request setup for DIMC
-          spatz_req.op       = DIMC_OP;        // you may keep the single DIMC_OP and use subfields below
+          spatz_req.op       = DIMC_OP;        // the single DIMC_OP and use subfields below
           spatz_req.ex_unit  = VFU;            // existing placeholder used VFU; adjust if you implement a dedicated unit
           spatz_req.rd       = rd;
           spatz_req.use_rd   = 1'b0;           // set to 1 if rd should be written back
@@ -1296,7 +1296,7 @@ module spatz_decoder
             riscv_instr::DIMC_INSTR_DPS: begin
               spatz_req.op_cfg.dimc.cmd = DIMC_CMD_DPS;
             end
-
+            
             default: begin
               spatz_req.op_cfg.dimc.cmd = DIMC_CMD_DSS;
             end

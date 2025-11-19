@@ -15,7 +15,7 @@ module spatz_vfu
   import fpnew_pkg::*; #(
     /// FPU configuration.
     parameter fpu_implementation_t FPUImplementation = fpu_implementation_t'(0),
-    // DIMC configuration
+    // DIMC confwhatiguration
     parameter SECTION_WIDTH = 256 
   ) (
     input  logic             clk_i,
@@ -115,7 +115,7 @@ module spatz_vfu
     VFU_RunningDIMC //New state for DIMC operations
   } state_t;
   state_t state_d, state_q;
-  `FF(state_q, state_d, VFU_RunningFPU)
+  `FF(state_q, state_d, VFU_RunningFPU)  
 
   // Propagate the tags through the functional units
   vfu_tag_t ipu_result_tag, fpu_result_tag, dimc_result_tag, result_tag; //DIMC result tag
@@ -164,7 +164,7 @@ module spatz_vfu
   assign is_dimc_insn = (spatz_req.op == DIMC_OP);  // New DIMC opcode
 
   // Functional unit busy signals
-  logic is_fpu_busy;
+  logic is_fpu_busy; 
   logic is_ipu_busy;
   logic is_dimc_busy; //DIMC
 
@@ -232,12 +232,13 @@ module spatz_vfu
     end
 
     // Current state of the VFU
-    if (spatz_req_valid)
+    if (spatz_req_valid) begin
       unique case (state_q)
         VFU_RunningIPU: begin
           if (is_fpu_insn) begin // Keep IPU->FPU transition
-            if (is_ipu_busy)
+            if (is_ipu_busy)begin
               stall = 1'b1;
+            end
             else begin
               state_d = VFU_RunningFPU;
               stall   = 1'b1;
@@ -285,6 +286,7 @@ module spatz_vfu
         
         default:;
       endcase
+    end
 
     // Finished the execution!
     if (spatz_req_valid && ((vl_d >= spatz_req.vl && !spatz_req.op_arith.is_reduction) || reduction_done)) begin
@@ -784,7 +786,7 @@ module spatz_vfu
       ipu_result_tag_d   = ipu_result_tag_q;
 
       // Send operands
-      ipu_in_ready     = 1'b0;
+      ipu_in_ready     = 1'b0;  
       int_ipu_operand1 = ipu_wide_operand1[ipu_operand_pnt_q*ELEN*N_IPU +: ELEN*N_IPU];
       int_ipu_operand2 = ipu_wide_operand2[ipu_operand_pnt_q*ELEN*N_IPU +: ELEN*N_IPU];
       int_ipu_operand3 = ipu_wide_operand3[ipu_operand_pnt_q*ELEN*N_IPU +: ELEN*N_IPU];
@@ -838,7 +840,7 @@ module spatz_vfu
   for (genvar ipu = 0; unsigned'(ipu) < N_IPU; ipu++) begin : gen_ipus
     logic ipu_ready;
     assign int_ipu_in_ready[ipu*ELENB +: ELENB] = {ELENB{ipu_ready}};
-
+ 
     logic is_widening;
     assign is_widening = spatz_req.op_arith.widen_vs1 || spatz_req.op_arith.widen_vs2;
 
@@ -866,7 +868,7 @@ module spatz_vfu
       .result_ready_i   (int_ipu_result_ready                                                                            ),
       .tag_o            (int_ipu_result_tag[ipu]                                                                         ),
       .busy_o           (int_ipu_busy[ipu]                                                                               )
-    );
+    );   
   end : gen_ipus
 
   ////////////
@@ -1120,7 +1122,6 @@ module spatz_vfu
   logic dimc_ready;
   logic [3:0] dimc_result_4bit;
   logic [23:0] dimc_psout;
-  
   // DIMC instance
   DIMC_18_fixed #(
     .SECTION_WIDTH(SECTION_WIDTH)
@@ -1132,14 +1133,14 @@ module spatz_vfu
     .FCSN(1'b1),                     // Feature buffer chip select (active-low)
     .MODE(spatz_req.mode),           // Bit resolution (0=1b, 1=2b, 2=4b)
     .FA('0),                         // Feature buffer address
-    .FD('0),                         // Feature buffer data
+    .FD('0),                         // Feature buffer datas
     .ADDIN(operand2[23:0]),          // Bias/partial sum input
     .SOUT(dimc_result_4bit[0]),      // Sum output (LSB of result)
     .RES_OUT(dimc_result_4bit[3:1]), // Result output (MSBs of 4-bit result)
     .PSOUT(dimc_psout),              // Pre-ReLU output
     .Q(),                            // Memory output (unused)
     .D('0),                          // Memory input (unused)
-    .RA(operand1[6:0]),              // Memory address (row address)
+    .RA({spatz_req.op_cfg.dimc.sec, spatz_req.op_cfg.dimc.k_row}),  // Memory address (row address)
     .WA(operand1[6:0]),              // Write address (when write command have provided)
     .RCSN(1'b1),                     // Read chip select (active-low)
     .RCSN0(1'b1),                    // Computation control
@@ -1166,7 +1167,7 @@ module spatz_vfu
 
   // DIMC busy signal
   assign is_dimc_busy = (state_q == VFU_RunningDIMC) && ~dimc_ready;
-
+  
   // DIMC tag propagation
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -1180,5 +1181,5 @@ module spatz_vfu
   assign dimc_psout_o = dimc_psout;
   assign dimc_sout_o = dimc_result_4bit[0];
   assign dimc_res_out_o = dimc_result_4bit[3:1];
-
+  
 endmodule : spatz_vfu

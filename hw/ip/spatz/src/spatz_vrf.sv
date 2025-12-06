@@ -215,4 +215,84 @@ module spatz_vrf
   if (NrReadPorts / NrReadPortsPerBank > NrVRFBanks)
     $error("[spatz_vrf] The number of vregfile banks needs to be increased to handle the number of read ports.");
 
+// ===============================================
+// VRF DEBUG MONITOR - SEPARATE BLOCK
+// ===============================================
+
+`ifndef SYNTHESIS
+
+// Separate always block for comprehensive VRF debugging
+always @(*) begin
+  static bit vrf_debug_enabled = 1'b1;
+   
+  if (vrf_debug_enabled) begin
+    // =====================
+    // BANK SELECTION DEBUG
+    // =====================
+    for (int port = 0; port < NrReadPorts; port++) begin
+      if (re_i[port] && !$isunknown(raddr_i[port])) begin
+        automatic logic bank = f_bank(raddr_i[port]);
+        $display("[BANK_DEBUG] Port=%0d: addr=v%0d -> bank=%0d, read_request=%b", 
+                 port, raddr_i[port], bank, read_request[bank][port]);
+      end
+    end
+    
+    // =====================
+    // READ REQUEST MONITOR
+    // =====================
+    for (int port = 0; port < NrReadPorts; port++) begin
+      if (re_i[port] && !$isunknown(raddr_i[port])) begin
+        $display("[VRF_READ_REQ]  Time=%0t | Port=%0d | Addr=v%0d", 
+                 $time, port, raddr_i[port]);
+      end
+    end
+    
+    // =====================
+    // READ RESPONSE MONITOR  
+    // =====================
+    for (int port = 0; port < NrReadPorts; port++) begin
+      if (rvalid_o[port]) begin
+        if ($isunknown(rdata_o[port])) begin
+          $display("[VRF_READ_RSP]  Time=%0t | Port=%0d | Data=ALL_X", 
+                   $time, port);
+        end else begin
+          $display("[VRF_READ_RSP]  Time=%0t | Port=%0d | Data=0x%h", 
+                   $time, port, rdata_o[port]);
+        end
+      end
+    end
+    
+    // =====================
+    // WRITE MONITOR
+    // =====================
+    for (int port = 0; port < NrWritePorts; port++) begin
+      if (we_i[port] && !$isunknown(waddr_i[port])) begin
+        $display("[VRF_WRITE]     Time=%0t | Port=%0d | Addr=v%0d | Data=0x%h", 
+                 $time, port, waddr_i[port], wdata_i[port]);
+      end
+    end
+    
+    // =====================
+    // ERROR CONDITIONS
+    // =====================
+    // Check if any read port returns X when it shouldn't
+    for (int port = 0; port < NrReadPorts; port++) begin
+      if (rvalid_o[port] && $isunknown(rdata_o[port])) begin
+        $display("[VRF_ERROR]    Time=%0t | Port=%0d returned X when valid!", 
+                 $time, port);
+      end
+    end
+  end
+end
+
+// Additional debug for internal VRF state
+initial begin
+  $display("[VRF_INIT] VRF Parameters: NrReadPorts=%0d, NrWritePorts=%0d", 
+           NrReadPorts, NrWritePorts);
+  $display("[VRF_INIT] VRF Data Width: %0d bits", $bits(vrf_data_t));
+end
+
+`endif // SYNTHESIS 
+
+
 endmodule : spatz_vrf

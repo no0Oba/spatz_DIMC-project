@@ -15,60 +15,60 @@ module spatz_vfu
   import fpnew_pkg::*; #(
     /// FPU configuration.
     parameter fpu_implementation_t FPUImplementation = fpu_implementation_t'(0),
-    // DIMC confwhatiguration
+    // DIMC configuration
     parameter SECTION_WIDTH = 256 
   ) (
-    input  logic             clk_i,
+    input  logic             clk_i,   
     input  logic             rst_ni,
-    input  logic [31:0]      hart_id_i,
+    input  logic [31:0]      hart_id_i,           //Multi-Hart Vector Processing (used in FPU)
     // Spatz req
-    input  spatz_req_t       spatz_req_i,
-    input  logic             spatz_req_valid_i,
-    output logic             spatz_req_ready_o,
+    input  spatz_req_t       spatz_req_i,         //Incoming vector instruction operation
+    input  logic             spatz_req_valid_i,   //Vector instruction request is valid
+    output logic             spatz_req_ready_o,   //VFU ready to accept new instruction
     // VFU response
-    output logic             vfu_rsp_valid_o,
-    input  logic             vfu_rsp_ready_i,
-    output vfu_rsp_t         vfu_rsp_o,
+    output logic             vfu_rsp_valid_o,     //vector operation response is valid 
+    input  logic             vfu_rsp_ready_i,     //VFU ready to receive response
+    output vfu_rsp_t         vfu_rsp_o,           //Vector operation result output
     // VRF
-    output vrf_addr_t        vrf_waddr_o,
-    output vrf_data_t        vrf_wdata_o,
-    output logic             vrf_we_o,
-    output vrf_be_t          vrf_wbe_o,
-    input  logic             vrf_wvalid_i,
-    output spatz_id_t  [3:0] vrf_id_o,
-    output vrf_addr_t  [2:0] vrf_raddr_o,
-    output logic       [2:0] vrf_re_o,
-    input  vrf_data_t  [2:0] vrf_rdata_i,
-    input  logic       [2:0] vrf_rvalid_i,
+    output vrf_addr_t        vrf_waddr_o,         //Vector register file write address
+    output vrf_data_t        vrf_wdata_o,         //Vector register file write data
+    output logic             vrf_we_o,            //Vector register file write enable
+    output vrf_be_t          vrf_wbe_o,           //Vector register file write byte enable
+    input  logic             vrf_wvalid_i,        //Vector register file write completed
+    output spatz_id_t  [3:0] vrf_id_o,            //Vector register file transaction identifiers
+    output vrf_addr_t  [2:0] vrf_raddr_o,         //Vector register file read addresses
+    output logic       [2:0] vrf_re_o,            //Vector register file read enables
+    input  vrf_data_t  [2:0] vrf_rdata_i,         //Vector register file read data
+    input  logic       [2:0] vrf_rvalid_i,        //Vector register file read data valid
     // FPU side channel
-    output status_t          fpu_status_o,
+    output status_t          fpu_status_o,        //Floating-point unit exception status
     // DIMC outputs
     output logic [23:0]      dimc_psout_o,
     output logic             dimc_sout_o,
     output logic [2:0]       dimc_res_out_o
-  );
 
-// Include FF
+    
+  );
+  
 `include "common_cells/registers.svh"
  
-  // Instruction tag (propagated together with the operands through the pipelines)
-  typedef struct packed {
-    spatz_id_t id;
+    typedef struct packed {
+    spatz_id_t id;          //Instruction identifier for tracking multiple in-flight operations
 
-    vew_e vsew;
-    vlen_t vstart;
+    vew_e vsew;             //Vector element width (8/16/32/64-bit) for operand sizing
+    vlen_t vstart;          //Starting element index for partial vector operations
 
     // Encodes both the scalar RD and the VD address in the VRF
-    vrf_addr_t vd_addr;
-    logic wb;
-    logic last;
+    vrf_addr_t vd_addr;     //Destination vector register address in VRF
+    logic wb;               //Writeback flag (1=scalar result, 0=vector result)
+    logic last;             //Final operation flag for multi-element instructions
 
     // Is this a narrowing instruction?
-    logic narrowing;
-    logic narrowing_upper;
+    logic narrowing;        //Narrowing operation flag (e.g., 64b→32b conversion)
+    logic narrowing_upper;  //Upper/lower half selector for narrowing operations
 
     // Is this a reduction?
-    logic reduction;
+    logic reduction;        //Reduction operation flag (vector→scalar operations)
   } vfu_tag_t;
 
   ///////////////////////
@@ -78,7 +78,8 @@ module spatz_vfu
   spatz_req_t spatz_req;
   logic       spatz_req_valid;
   logic       spatz_req_ready;
-
+  
+  // buffer for VFU is busy processing
   spill_register #(
     .T(spatz_req_t)
   ) i_operation_queue (
@@ -91,7 +92,7 @@ module spatz_vfu
     .valid_o(spatz_req_valid                                ),
     .ready_i(spatz_req_ready                                )
   );
-
+  // Add these register declarations at the top of your VFU module
   ///////////////
   //  Control  //
   ///////////////
@@ -281,6 +282,14 @@ module spatz_vfu
               state_d = is_fpu_insn ? VFU_RunningFPU : VFU_RunningIPU;
               stall   = 1'b1;
             end
+          end else begin
+            // Handle back-to-back DIMC instructions
+              if (is_dimc_busy) begin
+                stall = 1'b1;  // Wait if DIMC is still busy
+              end else begin
+              // Ready for next DIMC instruction
+              spatz_req_ready = 1'b1;  // Accept new instruction
+            end  
           end
         end
         
@@ -288,58 +297,63 @@ module spatz_vfu
       endcase
     end
 
-    // Finished the execution!
-    if (spatz_req_valid && ((vl_d >= spatz_req.vl && !spatz_req.op_arith.is_reduction) || reduction_done)) begin
-      spatz_req_ready         = spatz_req_valid;
-      busy_d                  = 1'b0;
-      vl_d                    = '0;
-      last_request            = 1'b1;
-      running_d[spatz_req.id] = 1'b0;
-      widening_upper_d        = 1'b0;
-      narrowing_upper_d       = 1'b0;
-    end
-    // Do we have a new instruction?
-    else if (spatz_req_valid && !running_d[spatz_req.id]) begin
-      // Start at vstart
-      vl_d                    = vstart;
-      busy_d                  = 1'b1;
-      running_d[spatz_req.id] = 1'b1;
+      // Finished the execution!
+  if (spatz_req_valid && 
+      (((vl_d >= spatz_req.vl && !spatz_req.op_arith.is_reduction) || reduction_done) ||
+       (is_dimc_insn && (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K} || !is_dimc_busy)))) begin
+    $display("✅ COMPLETION: id=%0d is_dimc=%b", spatz_req.id, is_dimc_insn);
+    spatz_req_ready         = spatz_req_valid;
+    busy_d                  = 1'b0;
+    vl_d                    = '0;
+    last_request            = 1'b1;
+    running_d[spatz_req.id] = 1'b0;
+    widening_upper_d        = 1'b0;
+    narrowing_upper_d       = 1'b0;
+  end
+  // Do we have a new instruction?
+  else if (spatz_req_valid && !running_d[spatz_req.id]) begin
+    $display("🚀 NEW_INSTR: id=%0d is_dimc=%b", spatz_req.id, is_dimc_insn);
+    // Start at vstart
+    vl_d                    = vstart;
+    busy_d                  = 1'b1;
+    running_d[spatz_req.id] = 1'b1;
 
-      /*  
-      // Priority: DIMC > IPU > FPU
-      if (is_dimc_insn) begin
-        state_d = VFU_RunningDIMC;
-        dimc_start_o = 1'b1;         // Trigger DIMC
-        dimc_ra_o = spatz_req.rs2[6:0]; // Row address
-        dimc_mode_o = spatz_req.rs1[1:0]; // Bit mode
-      end
-      else if (!is_fpu_insn) begin
-        state_d = VFU_RunningIPU;
-      end
-      else begin
-        state_d = VFU_RunningFPU;
-      end
-      
-      // Change number of remaining elements
-      if (word_issued)
-        vl_d = vl_q + nr_elem_word;
-    end
-    */
+    // Change number of remaining elements
+    if (word_issued)
+      vl_d = vl_q + nr_elem_word;
+  end
 
-      // Change number of remaining elements
-      if (word_issued)
-        vl_d = vl_q + nr_elem_word;
-    end
+  // An instruction finished execution
+  if ((result_tag.last && &(result_valid | ~pending_results) && reduction_state_q inside {Reduction_NormalExecution, Reduction_Wait}) || 
+      reduction_done ||
+      (is_dimc_insn && (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K} || !is_dimc_busy))) begin
+    vfu_rsp_o.id      = result_tag.id;
+    vfu_rsp_o.rd      = result_tag.vd_addr[GPRWidth-1:0];
+    vfu_rsp_o.wb      = result_tag.wb;
+    vfu_rsp_o.result  = result_tag.wb ? scalar_result : '0;
+    vfu_rsp_valid_o   = 1'b1;
+    $display("📤 VFU_RESPONSE: id=%0d is_dimc=%b", result_tag.id, is_dimc_insn);
+  end
+    
 
-    // An instruction finished execution
-    if ((result_tag.last && &(result_valid | ~pending_results) && reduction_state_q inside {Reduction_NormalExecution, Reduction_Wait}) || reduction_done) begin
-      vfu_rsp_o.id      = result_tag.id;
-      vfu_rsp_o.rd      = result_tag.vd_addr[GPRWidth-1:0];
-      vfu_rsp_o.wb      = result_tag.wb;
-      vfu_rsp_o.result  = result_tag.wb ? scalar_result : '0;
-      vfu_rsp_valid_o   = 1'b1;
-    end
   end: control_proc
+
+// ========== SEPARATE DEBUG BLOCKS ==========
+
+// Track instruction lifecycle
+/*
+// Add this at the top of your module or in the input handling
+always_ff @(posedge clk_i) begin
+    if (spatz_req_valid_i) begin
+        $display("🛑 VFU_INPUT: op=%h id=%0d ready=%b state=%0d busy=%b running=%b", 
+                 spatz_req_i.op, spatz_req_i.id, spatz_req_ready_o, state_q, busy_q, running_q);
+    end
+end
+// Include FF
+
+*/
+// ========== CONTINUE WITH YOUR EXISTING CODE ==========
+
 
   //////////////
   // Operands //
@@ -1119,51 +1133,185 @@ module spatz_vfu
   ////////////
 
   // DIMC signals
-  logic dimc_ready;
-  logic [3:0] dimc_result_4bit;
+  logic        dimc_ready;
+  logic [3:0]  dimc_result_4bit;
   logic [23:0] dimc_psout;
+  logic        _COMPE;
+  logic        _FCSN ;
+  logic [1:0]  _MODE ;
+  logic [1:0]  _FA   ;
+  logic [255:0]_FD   ;
+  logic [23:0]_ADDIN ;
+  logic [255:0]_Q    ;
+  logic [255:0]_D    ;
+  logic [7:0]  _RA   ;
+  logic [7:0]  _WA   ;
+  logic _RCSN ;
+  logic _RCSN0;
+  logic _RCSN1;
+  logic _RCSN2;
+  logic _RCSN3;
+  logic _WCSN;
+  logic _WEN;
+  logic [255:0]_M;
+  logic [7:0]_MCT;
+  logic compute_pulse;
+  logic _select_F;
+  logic _select_K;
+  
+  
+  assign compute_pulse = spatz_req_valid && 
+                        ((spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DSS) ||
+                         (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DPS));
+
+  assign _select_F = ~(spatz_req_valid && 
+                        (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_F)) ;
+
+  assign _select_K = ~(spatz_req_valid && 
+                        (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_K)) ;
+  
+  // Use read port 0 for DIMC VRF access
+  always_comb begin:DIMC_DECODE
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_F) begin: gen_dimc_DL_F
+      assign  _COMPE =1'b0;
+      assign  _FCSN  =_select_F;
+      assign  _MODE  = 2'b00;
+      assign  _FA    =spatz_req.op_cfg.dimc.sec;
+      assign  _FD    =vrf_rdata_i[1];
+      assign  _D     =0;
+      assign  _WA    =7'b0;
+      assign  _RCSN  =1'b1;
+      assign  _RCSN0 =1'b1;
+      assign  _RCSN1 =1'b1;
+      assign  _RCSN2 =1'b1;
+      assign  _RCSN3 =1'b1;
+      assign  _WCSN  =1'b1;
+      assign  _WEN   =1'b1;
+    end: gen_dimc_DL_F
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_K) begin: gen_dimc_DL_K
+      assign  _COMPE =1'b0;
+      assign  _FCSN  =1'b1;
+      assign  _MODE  =2'b00;
+      assign  _FA    ='x;
+      assign  _FD    ='0;
+      assign  _D     =vrf_rdata_i[1];
+      assign  _WA    ={spatz_req.op_cfg.dimc.k_row, spatz_req.op_cfg.dimc.sec};
+      assign  _RCSN  =1'b1;
+      assign  _RCSN0 =1'b1;
+      assign  _RCSN1 =1'b1;
+      assign  _RCSN2 =1'b1;
+      assign  _RCSN3 =1'b1;
+      assign  _WCSN  =_select_K;
+      assign  _WEN   =_select_K;  
+      assign _M      =   '1;  // ← CRITICAL: Enable all bits for writing
+      assign _MCT    = 8'h00;  // No masking for kernel load
+    end: gen_dimc_DL_K
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DPS) begin: gen_dimc_DPS
+      assign  _COMPE =compute_pulse;
+      assign  _FCSN  =1'b1;
+      assign  _MODE  =spatz_req.op_cfg.dimc.flags[1:0];
+      assign  _FA    ='x;
+      assign  _FD    ='x;
+      assign  _ADDIN =operand1[23:0];
+      assign  _D     =256'b0;
+      assign  _RA    ={spatz_req.op_cfg.dimc.k_row, spatz_req.op_cfg.dimc.sec};
+      assign  _WA    =7'bxx;
+      assign  _RCSN  =1'b0;
+      assign  _RCSN0 =1'b0;
+      assign  _RCSN1 =1'b0;
+      assign  _RCSN2 =1'b0;
+      assign  _RCSN3 =1'b0;
+      assign  _WCSN  =1'b1;
+      assign  _WEN   =1'b1;
+    end: gen_dimc_DPS
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DSS) begin: gen_dimc_DSS
+      assign  _COMPE =compute_pulse;
+      assign  _FCSN  =1'b1;
+      assign  _MODE =spatz_req.op_cfg.dimc.flags[1:0];
+      assign  _FA    ='x;
+      assign  _FD    ='x;
+      assign  _ADDIN =operand1[23:0];
+      assign  _D     =256'b0;
+      assign  _RA    ={spatz_req.op_cfg.dimc.k_row, spatz_req.op_cfg.dimc.sec};
+      assign  _WA    =7'bxx;
+      assign  _RCSN  =1'b0;
+      assign  _RCSN0 =1'b0;
+      assign  _RCSN1 =1'b0;
+      assign  _RCSN2 =1'b0;
+      assign  _RCSN3 =1'b0;
+      assign  _WCSN  =1'b1;
+      assign  _WEN   =1'b1;
+    end: gen_dimc_DSS
+  end:DIMC_DECODE
+
   // DIMC instance
   DIMC_18_fixed #(
     .SECTION_WIDTH(SECTION_WIDTH)
   )i_dimc (
-    .RCK(clk_i),                    // Main clock
-    .RESETn(rst_ni),                 // Active-low reset
-    .READYN(dimc_ready),             // Active-low ready (output valid)
-    .COMPE(state_q == VFU_RunningDIMC), // Operation mode (1=compute, 0=memory)
-    .FCSN(1'b1),                     // Feature buffer chip select (active-low)
-    .MODE(spatz_req.mode),           // Bit resolution (0=1b, 1=2b, 2=4b)
-    .FA('0),                         // Feature buffer address
-    .FD('0),                         // Feature buffer datas
-    .ADDIN(operand2[23:0]),          // Bias/partial sum input
-    .SOUT(dimc_result_4bit[0]),      // Sum output (LSB of result)
-    .RES_OUT(dimc_result_4bit[3:1]), // Result output (MSBs of 4-bit result)
-    .PSOUT(dimc_psout),              // Pre-ReLU output
-    .Q(),                            // Memory output (unused)
-    .D('0),                          // Memory input (unused)
-    .RA({spatz_req.op_cfg.dimc.sec, spatz_req.op_cfg.dimc.k_row}),  // Memory address (row address)
-    .WA(operand1[6:0]),              // Write address (when write command have provided)
-    .RCSN(1'b1),                     // Read chip select (active-low)
-    .RCSN0(1'b1),                    // Computation control
-    .RCSN1(1'b1),                    // Computation control
-    .RCSN2(1'b1),                    // Computation control
-    .RCSN3(1'b1),                    // Computation control
-    .WCK(clk_i),                     // Write clock
-    .WCSN(1'b1),                     // Write chip select (active-low)
-    .WEN(1'b1),                      // Write enable (active-low)
-    .M('0),                          // Bitwise write mask (unused)
-    .MCT('0)                         // Masking coding thermometric (unused)
+    .RCK(clk_i),                                                    // Main clock
+    .RESETn(rst_ni),                                                // Active-low reset
+    .READYN(dimc_ready),                                            // Active-low ready (output valid)
+    .COMPE(_COMPE),                                                 // Operation mode (1=compute, 0=memory)
+    .FCSN(_FCSN),                                                   // Feature buffer chip select (active-low)
+    .MODE(_MODE),                                                   // Bit resolution (0=1b, 1=2b, 2=4b) spatz_req.mode we can aslo use it
+    .FA(_FA),                                                       // Feature buffer address we use 
+    .FD(_FD),                                                       // Feature buffer datas
+    .ADDIN(_ADDIN),                                                 // Bias/partial sum input
+    .SOUT(dimc_result_4bit[0]),                                     // Sum output (LSB of result)
+    .RES_OUT(dimc_result_4bit[3:1]),                                // Result output (MSBs of 4-bit result)
+    .PSOUT(dimc_psout),                                             // Pre-ReLU output
+    .Q(_Q),                                                         // Memory output (unused)
+    .D(_D),                                                         // Memory input (unused)
+    .RA(_RA),                                                       // Memory address (row address)
+    .WA(_WA),                                                       // Write address (when write command have provided)
+    .RCSN (_RCSN),                                                  // Read chip select (active-low)
+    .RCSN0(_RCSN0),                                                 // Computation control
+    .RCSN1(_RCSN1),                                                 // Computation control
+    .RCSN2(_RCSN2),                                                 // Computation control
+    .RCSN3(_RCSN3),                                                 // Computation control
+    .WCK(clk_i),                                                    // Write clock
+    .WCSN(_WCSN),                                                   // Write chip select (active-low)
+    .WEN(_WEN),                                                     // Write enable (active-low)
+    .M(_M),                                                         // Bitwise write mask (unused)
+    .MCT(_MCT)                                                        // Masking coding thermometric (unused)
   );
 
   // DIMC result handling
   assign dimc_in_ready = {N_FU*ELENB{~dimc_ready}};
   assign dimc_result_valid = {N_FU*ELENB{~dimc_ready}};
-  
+  /*
   always_comb begin
     dimc_result = '0;
     for (int i = 0; i < N_FU; i++) begin
       dimc_result[i*ELEN +: 24] = dimc_psout;  // 24-bit result in each lane
     end
   end
+  
+  logic [255:0] dimc_result_reg;
+  logic [5:0] result_counter; // Tracks where to place next result (up to 10 results in 256 bits)
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+     dimc_result_reg <= '0;
+     result_counter <= '0;
+    end else if (dimc_ready) begin // Assuming you have a valid signal for new results
+      // Shift the existing results left by 24 bits and insert new result at LSB
+      dimc_result_reg <= {dimc_result_reg[231:0], dimc_psout};
+    
+     // Increment counter (wrap around after 10 results since 10*24=240 < 256)
+      if (result_counter == 6'd9) begin
+        result_counter <= 6'd0;
+     end else begin
+      result_counter <= result_counter + 1;
+      end
+    end
+  end
+
+    // Output assignment
+  assign dimc_result = dimc_result_reg;
+  */
+
+  assign dimc_result = dimc_psout;  
 
   // DIMC busy signal
   assign is_dimc_busy = (state_q == VFU_RunningDIMC) && ~dimc_ready;
@@ -1178,8 +1326,9 @@ module spatz_vfu
   end
 
   // DIMC outputs
-  assign dimc_psout_o = dimc_psout;
-  assign dimc_sout_o = dimc_result_4bit[0];
+  assign dimc_psout_o   = dimc_psout;
+  assign dimc_sout_o    = dimc_result_4bit[0];
   assign dimc_res_out_o = dimc_result_4bit[3:1];
-  
+  //assign vrf_wdata_o    = _Q;
+
 endmodule : spatz_vfu

@@ -1270,6 +1270,7 @@ module spatz_decoder
           spatz_req.rd       = rd;
           spatz_req.use_rd   = 1'b0;           // set to 1 if rd should be written back
           spatz_req.rs1      = rs1;            // row index of VRF (0..31) — use this to pick the VRF row
+          spatz_req.use_vs1  = 1'b1;           // ✅ READ FROM VRF!
           spatz_req.vtype.vsew = EW_32;        // set element width as appropriate for your DIMC op
 
           // subfields: interpret imm12 bits to encode arguments (example layout)
@@ -1278,8 +1279,8 @@ module spatz_decoder
           //   imm12[4:0] = k_row (5 bits)         -> k_row = 5 -> imm12[4:0] = 5
           //   imm12[6:5] = sec  (2 bits)         -> sec = 2 -> imm12[6:5] = 2
           //   imm12[11:7] = reserved / small addr or flags
-          spatz_req.op_cfg.dimc.k_row = imm12[4:0];   // k-row
-          spatz_req.op_cfg.dimc.sec   = imm12[6:5];   // section / sec value
+          spatz_req.op_cfg.dimc.k_row = imm12[6:2];   // k-row
+          spatz_req.op_cfg.dimc.sec   = imm12[1:0];   // section / sec value
           spatz_req.op_cfg.dimc.flags = imm12[11:7];  // extra flags / address nibble (if needed)
 
           // Variant-specific tweaks using casez (similar style to DIV/REM decode)

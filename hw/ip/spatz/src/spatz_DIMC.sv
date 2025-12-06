@@ -16,19 +16,19 @@
     output logic        READYN,     // Active-low ready (output valid)
     input  logic        COMPE,      // Operation mode (1=compute, -
     input  logic        FCSN,       // Feature buffer chip select (active-low)
-    input  logic [1:0]  MODE,       // Bit resolution (0=1b, 1=2b, 2=4b)
+    input  logic [1:0]  MODE,       // Bit resolution (0=1b, 1=2b, 2=4b, 3=8b)
     
     // Address/Data Interface
-    input  logic [1:0]  FA,         // Feature buffer address
-    input  logic [SECTION_WIDTH-1:0] FD,        // Feature buffer data
-    input  logic [23:0] ADDIN,      // Bias/partial sum input
-    output logic        SOUT,       // Sum output (LSB of result)
-    output logic [2:0]  RES_OUT,    // Result output (MSBs of 4-bit result)
-    output logic [23:0] PSOUT,      // Pre-ReLU output
-    output logic [SECTION_WIDTH-1:0] Q,         // Memory output
-    input  logic [SECTION_WIDTH-1:0] D,         // Memory input
-    input  logic [6:0]  RA,         // Memory address
-    input  logic [6:0]  WA,         // Write address
+    input  logic [1:0]                  FA,        // Feature buffer address
+    input  logic [SECTION_WIDTH-1:0]    FD,        // Feature buffer data
+    input  logic [23:0]                 ADDIN,     // Bias/partial sum input
+    output logic                        SOUT,      // Sum output (LSB of result)
+    output logic [2:0]                  RES_OUT,   // Result output (MSBs of 4-bit result)
+    output logic [23:0]                 PSOUT,     // Pre-ReLU output
+    output logic [SECTION_WIDTH-1:0]    Q,         // Memory output
+    input  logic [SECTION_WIDTH-1:0]    D,         // Memory input
+    input  logic [6:0]                  RA,        // Memory address
+    input  logic [6:0]                  WA,        // Write address
     
     // Memory Control
     input  logic        RCSN,       // Read chip select (active-low)
@@ -41,8 +41,8 @@
     input  logic        WEN,        // Write enable (active-low)
     
     // Masking Signals
-    input  logic [SECTION_WIDTH-1:0] M,         // Bitwise write mask
-    input  logic [7:0]  MCT         // Masking coding thermometric
+    input  logic [SECTION_WIDTH-1:0]    M,         // Bitwise write mask
+    input  logic [7:0]                  MCT        // Masking coding thermometric
     
    
 );
@@ -58,7 +58,7 @@ localparam ROW_WIDTH = NUM_SECTIONS * SECTION_WIDTH;
 //------------------------------------------------------------------------------
 // Memory Architecture
 //------------------------------------------------------------------------------
-logic [31:0][NUM_SECTIONS-1:0][SECTION_WIDTH-1:0] kernel_mem;  // 32 rows, 4 sections, 256 bits each
+logic [NUM_SECTIONS-1:0][SECTION_WIDTH-1:0] kernel_mem [31:0];  // 32 rows, 4 sections, 256 bits each
 logic [NUM_SECTIONS-1:0][SECTION_WIDTH-1:0] feature_buf;       // 4 sections, 256 bits each
 
 //------------------------------------------------------------------------------
@@ -87,8 +87,6 @@ logic [23:0] comp_result;
 logic [23:0] psum;
 logic [3:0] result_4bit;
 
-// Registered write address
-logic [6:0] reg_WA;
 
 //------------------------------------------------------------------------------
 // Combinational Logic Blocks
@@ -183,10 +181,6 @@ end
 // Sequential Logic Blocks
 //------------------------------------------------------------------------------
 
-// Write address registration
-always_ff @(posedge RCK) begin
-    reg_WA <= WA;
-end
 
 // Memory Mode Operations
 always_ff @(posedge RCK or negedge RESETn) begin
@@ -205,7 +199,7 @@ always_ff @(posedge RCK or negedge RESETn) begin
         // Memory write
         if (mem_write_en) begin
             for (int i = 0; i < 256; i++) begin
-                if (M[i]) kernel_mem[reg_WA[6:2]][reg_WA[1:0]][i] <= D[i];
+                if (M[i]) kernel_mem[WA[6:2]][WA[1:0]][i] <= D[i];
             end
         end
     end

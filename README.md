@@ -105,6 +105,32 @@ Each Spatz has three functional units:
 
 The most up-to-date list of supported vector instructions can be found in `sw/riscvTests/CMakeLists.txt`. Spatz does not yet understand vector masking (although this is a work in progress), or fixed-point computation. It also does not understand many of the shuffling and permutation instructions of RVV (e.g., `vrgather`), and users are asked to shuffle data in memory through indexed memory operations. We very much welcome contributions that expand Spatz' capabilities as a vector coprocessor!
 
+## DIMC Integration with Spatz
+
+As part of ongoing enhancements to Spatz, a **Digital In-Memory Compute (DIMC) module** has been integrated into the SPATZ processor to accelerate matrix-vector computations and other high-throughput operations. The integration focuses on maximizing parallelism and throughput while minimizing memory access overhead. 
+
+### Overview
+
+- The DIMC module is connected to the Spatz core via a **feature buffer** and **kernel memory**, enabling efficient streaming of input feature maps and weight matrices.
+- A **2D tiled compute model** is used, where matrix-vector multiplications are performed across localized tiles in memory, similar to weight-stationary processing.
+- The DIMC supports **bitwise operations** and **popcount-based computations**, allowing acceleration of specialized workloads on the RISC-V SPATZ processor.
+- Two operating modes are available: **memory mode** (storing and reading data) and **compute mode** (performing in-memory computation).
+
+### Integration Details
+
+- DIMC integration ensures **synchronized computation** with Spatz's pipeline, maintaining high throughput across multiple vector functional units (VAUs).
+- The module interacts with Spatz cores in a way similar to a **peripheral or accelerator**, emulating a soft peripheral interface.
+- Extensive verification has been performed to ensure correct **data flow, timing, and output encoding** for all supported operations.
+
+![DIMC Integration](./docs/fig/dimc_integration.png)
+
+### Benefits
+
+- Offloads computation from the Spatz core, freeing resources for other tasks.
+- Reduces memory bottlenecks by performing computation close to the data.
+- Demonstrates a scalable approach to integrating specialized accelerators into RISC-V cores.
+
+
 ## License
 
 Spatz is being made available under permissive open-source licenses.

@@ -2441,7 +2441,6 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       riscv_instr::DIMC_INSTR_DPS,
       riscv_instr::DIMC_INSTR_DSS: begin
         if (RVV) begin
-       // keep scalar rd disabled — DIMC writes/read accelerator, not scalar reg
           write_rd        = 1'b0;
           uses_rd         = 1'b0;
 

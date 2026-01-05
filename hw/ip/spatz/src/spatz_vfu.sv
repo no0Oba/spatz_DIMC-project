@@ -122,9 +122,11 @@ module spatz_vfu
   vfu_tag_t ipu_result_tag, fpu_result_tag, dimc_result_tag, result_tag; //DIMC result tag
   vfu_tag_t input_tag;
 
+/*
   assign result_tag = (state_q == VFU_RunningIPU) ? ipu_result_tag :
                       (state_q == VFU_RunningFPU) ? fpu_result_tag :
                       dimc_result_tag; // Propagate the tags for DIMC
+*/
 
   // Number of words advanced by vstart
   vlen_t vstart;
@@ -189,6 +191,9 @@ module spatz_vfu
   // Is the reduction done?
   logic reduction_done;
 
+  //DIMC PSOUT INDEX TRACK
+  logic [2:0] current_element_idx;
+  
   // Are we producing the upper or lower part of the results  of a narrowing instruction?
   logic narrowing_upper_d, narrowing_upper_q;
   `FF(narrowing_upper_q, narrowing_upper_d, 1'b0)
@@ -289,6 +294,10 @@ module spatz_vfu
               end else begin
               // Ready for next DIMC instruction
               spatz_req_ready = 1'b1;  // Accept new instruction
+              // ADD THIS CRITICAL LINE: Reset state for new instruction
+              // When current DIMC instruction is done and we accept new one,
+              // we need to "re-enter" the DIMC state
+              state_d = VFU_RunningDIMC;  // This ensures fresh state entry
             end  
           end
         end
@@ -301,7 +310,6 @@ module spatz_vfu
   if (spatz_req_valid && 
       (((vl_d >= spatz_req.vl && !spatz_req.op_arith.is_reduction) || reduction_done) ||
        (is_dimc_insn && (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K} || !is_dimc_busy)))) begin
-    $display("✅ COMPLETION: id=%0d is_dimc=%b", spatz_req.id, is_dimc_insn);
     spatz_req_ready         = spatz_req_valid;
     busy_d                  = 1'b0;
     vl_d                    = '0;
@@ -312,7 +320,6 @@ module spatz_vfu
   end
   // Do we have a new instruction?
   else if (spatz_req_valid && !running_d[spatz_req.id]) begin
-    $display("🚀 NEW_INSTR: id=%0d is_dimc=%b", spatz_req.id, is_dimc_insn);
     // Start at vstart
     vl_d                    = vstart;
     busy_d                  = 1'b1;
@@ -332,27 +339,26 @@ module spatz_vfu
     vfu_rsp_o.wb      = result_tag.wb;
     vfu_rsp_o.result  = result_tag.wb ? scalar_result : '0;
     vfu_rsp_valid_o   = 1'b1;
-    $display("📤 VFU_RESPONSE: id=%0d is_dimc=%b", result_tag.id, is_dimc_insn);
   end
     
 
   end: control_proc
 
-// ========== SEPARATE DEBUG BLOCKS ==========
-
-// Track instruction lifecycle
-/*
-// Add this at the top of your module or in the input handling
-always_ff @(posedge clk_i) begin
-    if (spatz_req_valid_i) begin
-        $display("🛑 VFU_INPUT: op=%h id=%0d ready=%b state=%0d busy=%b running=%b", 
-                 spatz_req_i.op, spatz_req_i.id, spatz_req_ready_o, state_q, busy_q, running_q);
-    end
-end
-// Include FF
-
-*/
-// ========== CONTINUE WITH YOUR EXISTING CODE ==========
+ // ========== SEPARATE DEBUG BLOCKS ==========
+ /*
+ // Add debug prints
+ always @(posedge clk_i) begin
+  if (state_q == VFU_RunningDIMC) begin
+    $display("[DIMC WRITE] Time %t: element_sel=%0d, wbe=%08h, data[%0d]=0x%08h",
+              $time, 
+              dimc_element_sel, 
+              vreg_wbe,
+              dimc_element_sel,
+              dimc_32bit_result);
+  end
+ end
+ */
+ // ========== CONTINUE WITH EXISTING CODE ==========
 
 
   //////////////
@@ -672,11 +678,31 @@ end
     // Got a new result
     if (&(result_valid | ~pending_results) && !result_tag.reduction) begin
       vreg_we  = !result_tag.wb;
-      vreg_wbe = '1;
-
-      if (result_tag.narrowing) begin
+     
+      // ========== DIMC SPECIFIC LOGIC ==========
+      if (state_q == VFU_RunningDIMC && is_dimc_insn) begin
+        // For DIMC: generate byte enables based on element_sel field
+        vreg_wbe = '0; // Start with all bytes disabled
+      
+        // Enable only the 4 bytes for the selected 32-bit element
+        // current_element_idx selects which of the 8 elements (0-7) to write
+        if (current_element_idx < 8) begin  // Safety check
+          // Set 4 bits (32 bits = 4 bytes) at the calculated position
+          vreg_wbe[current_element_idx * 4 +: 4] = 4'b1111;
+        end
+      
+        // Debug output
+        $display("[DIMC] Writing to element %0d, wbe=0x%h", 
+                  current_element_idx, vreg_wbe);
+      end 
+      // ========== EXISTING LOGIC ==========
+      else if (result_tag.narrowing) begin
         // Only write half of the elements
         vreg_wbe = result_tag.narrowing_upper ? {{(N_FU*ELENB/2){1'b1}}, {(N_FU*ELENB/2){1'b0}}} : {{(N_FU*ELENB/2){1'b0}}, {(N_FU*ELENB/2){1'b1}}};
+      end
+      else begin
+       // Default: write all bytes
+       vreg_wbe = '1;
       end
     end
 
@@ -1127,7 +1153,7 @@ end
     assign fpu_result_tag   = '0;
     assign fpu_status_o     = '0;
   end: gen_no_fpu
-
+ 
   ////////////
   //  DIMC  //
   ////////////
@@ -1159,6 +1185,22 @@ end
   logic _select_F;
   logic _select_K;
   
+  // DIMC element select from instruction
+  logic [2:0] dimc_element_sel;
+  logic [31:0] dimc_32bit_result;// Create 32-bit result from 24-bit PS output (zero-extend to 32-bit)
+  logic [N_FU*ELEN-1:0] dimc_result_wide;// Create 256-bit result with 32-bit element in correct position
+ 
+  // FIFO to track vd for in-flight DIMC computations
+  logic [7:0] dimc_vd_fifo [0:3];      // 4-entry FIFO (max 4 in-flight) vd+sel bits [7:5]=element_sel, bits [4:0]=vd
+  logic [1:0] dimc_fifo_head;          // Read pointer
+  logic [1:0] dimc_fifo_tail;          // Write pointer  
+  logic [2:0] dimc_fifo_count;         // Number of entries in FIFO
+
+  // Store tags for each in-flight computation
+ vfu_tag_t dimc_tag_fifo [0:3];
+
+ // Combinational tag output
+ vfu_tag_t dimc_result_tag_comb;
   
   assign compute_pulse = spatz_req_valid && 
                         ((spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DSS) ||
@@ -1203,7 +1245,7 @@ end
       assign  _RCSN3 =1'b1;
       assign  _WCSN  =_select_K;
       assign  _WEN   =_select_K;  
-      assign _M      =   '1;  // ← CRITICAL: Enable all bits for writing
+      assign _M      =   '1;  // ? CRITICAL: Enable all bits for writing
       assign _MCT    = 8'h00;  // No masking for kernel load
     end: gen_dimc_DL_K
     if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DPS) begin: gen_dimc_DPS
@@ -1227,7 +1269,7 @@ end
     if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DSS) begin: gen_dimc_DSS
       assign  _COMPE =compute_pulse;
       assign  _FCSN  =1'b1;
-      assign  _MODE =spatz_req.op_cfg.dimc.flags[1:0];
+      assign  _MODE  =spatz_req.op_cfg.dimc.flags[1:0];
       assign  _FA    ='x;
       assign  _FD    ='x;
       assign  _ADDIN =operand1[23:0];
@@ -1276,54 +1318,119 @@ end
     .MCT(_MCT)                                                        // Masking coding thermometric (unused)
   );
 
-  // DIMC result handling
+  // ========== DIMC RESULT HANDLING ==========
+
+  // Calculate which 32-bit element to write (0-7 for 256-bit register)
+  assign current_element_idx = dimc_element_sel; // Direct from instruction
   assign dimc_in_ready = {N_FU*ELENB{~dimc_ready}};
   assign dimc_result_valid = {N_FU*ELENB{~dimc_ready}};
-  /*
-  always_comb begin
-    dimc_result = '0;
-    for (int i = 0; i < N_FU; i++) begin
-      dimc_result[i*ELEN +: 24] = dimc_psout;  // 24-bit result in each lane
-    end
-  end
+  assign dimc_32bit_result = {8'b0, dimc_psout}; // Zero-extend to 32-bit
+ 
+ always_comb begin
+  dimc_result_wide = '0;
+  // Place 32-bit result at element position specified by instruction
+  // Each element is 32 bits, so multiply by 32
+  dimc_result_wide[current_element_idx * 32 +: 32] = dimc_32bit_result;
+ end
+
+ assign dimc_result = dimc_result_wide;
   
-  logic [255:0] dimc_result_reg;
-  logic [5:0] result_counter; // Tracks where to place next result (up to 10 results in 256 bits)
-
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-     dimc_result_reg <= '0;
-     result_counter <= '0;
-    end else if (dimc_ready) begin // Assuming you have a valid signal for new results
-      // Shift the existing results left by 24 bits and insert new result at LSB
-      dimc_result_reg <= {dimc_result_reg[231:0], dimc_psout};
-    
-     // Increment counter (wrap around after 10 results since 10*24=240 < 256)
-      if (result_counter == 6'd9) begin
-        result_counter <= 6'd0;
-     end else begin
-      result_counter <= result_counter + 1;
-      end
-    end
-  end
-
-    // Output assignment
-  assign dimc_result = dimc_result_reg;
-  */
-
-  assign dimc_result = dimc_psout;  
-
   // DIMC busy signal
   assign is_dimc_busy = (state_q == VFU_RunningDIMC) && ~dimc_ready;
+ 
+ //----------  
+ // FIFO to track vd and wbe for in-flight DIMC computations
+ //-----------
+ assign dimc_element_sel = (dimc_fifo_count > 0 && !dimc_ready) ? 
+                         dimc_vd_fifo[dimc_fifo_head][7:5] :  // Delayed from FIFO
+                         spatz_req.op_cfg.dimc.flags[4:2];    // spatz_req.op_cfg.dimc.flags[4:2]; Extract from immediate
   
-  // DIMC tag propagation
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      dimc_result_tag <= '0;
-    end else if (operands_ready && state_q == VFU_RunningDIMC) begin
-      dimc_result_tag <= input_tag;
+ // Override the result_tag assignment to use combinational path
+ assign result_tag = (state_q == VFU_RunningDIMC) ? dimc_result_tag_comb : 
+                   (state_q == VFU_RunningIPU) ? ipu_result_tag : 
+                   fpu_result_tag;
+
+ // Tag is always available from FIFO head
+ assign dimc_result_tag_comb = (dimc_fifo_count > 0) ? 
+                             dimc_tag_fifo[dimc_fifo_head] : input_tag;
+
+ always_ff @(posedge clk_i or negedge rst_ni) begin
+  if (!rst_ni) begin
+    // Initialize
+    dimc_result_tag <= '0;
+    for (int i = 0; i < 4; i++) begin
+      dimc_vd_fifo[i] <= '0;
+      dimc_tag_fifo[i] <= '0;
+    end
+    dimc_fifo_head <= '0;
+    dimc_fifo_tail <= '0;
+    dimc_fifo_count <= '0;
+  end else begin
+    // ===== FIFO WRITE =====
+    // When DSS/DPS computation starts
+    if (compute_pulse && state_q == VFU_RunningDIMC && 
+        spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS} &&
+        dimc_fifo_count < 4) begin
+      
+      // Push to FIFO
+      dimc_vd_fifo[dimc_fifo_tail] <= {spatz_req.op_cfg.dimc.flags[4:2], spatz_req.vd};
+      //                               element_sel[2:0]                 vd[4:0]  spatz_req.vd;
+      dimc_tag_fifo[dimc_fifo_tail] <= input_tag;
+      dimc_fifo_tail <= dimc_fifo_tail + 1;
+      dimc_fifo_count <= dimc_fifo_count + 1;
+      
+      $display("[DIMC FIFO] Time %t: PUSH: vd_reg=%0d (tail=%0d, count=%0d)", 
+                $time, spatz_req.vd, dimc_fifo_tail, dimc_fifo_count + 1);
+    end
+    
+    // ===== POP WHEN RESULT ARRIVES =====
+    // When DIMC result is ready
+    if (!dimc_ready && dimc_fifo_count > 0) begin
+
+      // Extract vd and element_sel before popping updated
+      automatic logic [4:0] current_vd = dimc_vd_fifo[dimc_fifo_head][4:0];
+      automatic logic [2:0] current_element_sel = dimc_vd_fifo[dimc_fifo_head][7:5];
+      
+      // Update vd address for tag
+      dimc_tag_fifo[dimc_fifo_head].vd_addr <= 
+        current_vd << $clog2(NrWordsPerVector);
+
+      // Also update the current element selector for the write
+      // This gets used by the element selection logic
+      //delayed_element_sel <= current_element_sel;
+      // Pop from FIFO
+
+      dimc_fifo_head <= dimc_fifo_head + 1;
+      dimc_fifo_count <= dimc_fifo_count - 1;
+      
+      $display("[DIMC FIFO] Time %t: POP: vd_reg=%0d (result ready)",
+               $time, dimc_vd_fifo[dimc_fifo_head]);
+    end
+    
+    // ===== UPDATE REGISTERED TAG =====
+    // Keep registered version in sync
+    dimc_result_tag <= dimc_result_tag_comb;
+    
+    // ===== RESET FOR LD_F/LD_K =====
+    if (state_q == VFU_RunningDIMC && 
+        spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K}) begin
+      // Clear FIFO
+      dimc_fifo_head <= '0;
+      dimc_fifo_tail <= '0;
+      dimc_fifo_count <= '0;
     end
   end
+ end
+ // DEBUG: Track DIMC ready signal and actual writes
+ always @(posedge clk_i) begin
+  static logic dimc_ready_last = 1'b1;
+
+  // Track dimc_ready changes
+  if (dimc_ready != dimc_ready_last) begin
+    $display("[DIMC READY] Time %0t: %0b -> %0b", $time, dimc_ready_last, dimc_ready);
+    dimc_ready_last <= dimc_ready;
+  end
+ end
 
   // DIMC outputs
   assign dimc_psout_o   = dimc_psout;

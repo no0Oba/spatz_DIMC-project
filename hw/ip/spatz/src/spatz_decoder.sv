@@ -38,6 +38,35 @@ module spatz_decoder
   // New spatz request from decoded instruction
   spatz_req_t spatz_req;
 
+  /*
+  // Pipeline to delay vd by 4 cycles
+  logic [4:0] vd_pipe [3:0];  // 4-stage pipeline for vd
+  
+  ////////////////
+  // vd Pipeline //
+  ////////////////
+  
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      for (int i = 0; i < 4; i++) begin
+        vd_pipe[i] <= '0;
+      end
+    end else begin
+      // Shift pipeline when a new DIMC instruction is decoded
+      if (decoder_req_valid_i && decoder_req_i.instr inside {
+          riscv_instr::DIMC_INSTR_LD_F,
+          riscv_instr::DIMC_INSTR_LD_K,
+          riscv_instr::DIMC_INSTR_DPS,
+          riscv_instr::DIMC_INSTR_DSS}) begin
+        vd_pipe[0] <= decoder_req_i.instr[11:7];  // Capture new vd
+        for (int i = 1; i < 4; i++) begin
+          vd_pipe[i] <= vd_pipe[i-1];             // Shift vd down the pipeline
+        end
+      end
+    end
+  end
+  */
+  
   /////////////
   // Decoder //
   /////////////
@@ -1260,16 +1289,17 @@ module spatz_decoder
 
           // decode standard I-type fields
           automatic logic [11:0] imm12 = decoder_req_i.instr[31:20];    // 12-bit immediate
-          automatic logic [4:0]  rs1   = decoder_req_i.instr[19:15];    // source (here: VRF row index)
+          automatic logic [4:0]  vs1   = decoder_req_i.instr[19:15];    // source (here: VRF row index)
           automatic logic [2:0]  funct3= decoder_req_i.instr[14:12];
-          automatic logic [4:0]  rd    = decoder_req_i.instr[11:7];
+          automatic logic [4:0]  vd    = decoder_req_i.instr[11:7];
 
+          
           // Common request setup for DIMC
           spatz_req.op       = DIMC_OP;        // the single DIMC_OP and use subfields below
           spatz_req.ex_unit  = VFU;            // existing placeholder used VFU; adjust if you implement a dedicated unit
-          spatz_req.rd       = rd;
+          spatz_req.vd       = vd;             // vd_pipe[3]
           spatz_req.use_rd   = 1'b0;           // set to 1 if rd should be written back
-          spatz_req.rs1      = rs1;            // row index of VRF (0..31) — use this to pick the VRF row
+          spatz_req.vs1      = vs1;            // row index of VRF (0..31) — use this to pick the VRF row
           spatz_req.use_vs1  = 1'b1;           // ✅ READ FROM VRF!
           spatz_req.vtype.vsew = EW_32;        // set element width as appropriate for your DIMC op
 
@@ -1283,6 +1313,11 @@ module spatz_decoder
           spatz_req.op_cfg.dimc.sec   = imm12[1:0];   // section / sec value
           spatz_req.op_cfg.dimc.flags = imm12[11:7];  // extra flags / address nibble (if needed)
 
+
+         // Where you decode the instruction
+         $display("[DIMC_INSTR] Time %t: vd=v%0d, vs1=v%0d, imm12=0x%h", 
+         $time, vd, vs1, imm12);
+  
           // Variant-specific tweaks using casez (similar style to DIV/REM decode)
           unique casez (decoder_req_i.instr)
             riscv_instr::DIMC_INSTR_LD_K: begin
@@ -1836,8 +1871,40 @@ module spatz_decoder
     end // Instruction valid
   end : decoder
 
+/*
+  // Create a modified version of spatz_req for output
+  spatz_req_t spatz_req_modified;
+  
+  always_comb begin
+    spatz_req_modified = spatz_req;
+    
+    // Only modify vd for DIMC instructions
+    if (spatz_req.op == DIMC_OP) begin
+      spatz_req_modified.vd = vd_pipe[2];
+    end
+  end
+
+   // DEBUG PRINTS
+  always @(posedge clk_i) begin
+    if (decoder_req_valid_i) begin
+      $display("[DECODER] Time %0t: Instruction = %08h, original_vd = %02d", 
+               $time, decoder_req_i.instr, decoder_req_i.instr[11:7]);
+      
+      if (decoder_req_i.instr inside {
+          riscv_instr::DIMC_INSTR_LD_F,
+          riscv_instr::DIMC_INSTR_LD_K,
+          riscv_instr::DIMC_INSTR_DPS,
+          riscv_instr::DIMC_INSTR_DSS}) begin
+        $display("[DECODER]   DIMC detected! opcode=%0d, spatz_req.vd=%0d, spatz_req_modified.vd=%0d",
+                 spatz_req.op, spatz_req.vd, spatz_req_modified.vd);
+        $display("[DECODER]   Pipeline: vd_pipe[0]=%0d, [1]=%0d, [2]=%0d, [3]=%0d",
+                 vd_pipe[0], vd_pipe[1], vd_pipe[2], vd_pipe[3]);
+      end
+    end
+  end
+*/
   // Check if rsp valid and assign spatz_req
-  assign decoder_rsp_o.spatz_req     = spatz_req;
+  assign decoder_rsp_o.spatz_req     = spatz_req; //DIMC edit due to delay before spatz_req_modified
   assign decoder_rsp_o.instr_illegal = decoder_req_valid_i & illegal_instr;
   assign decoder_rsp_valid_o         = decoder_req_valid_i;
 

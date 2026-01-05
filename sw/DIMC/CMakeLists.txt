@@ -28,3 +28,4 @@ enable_testing()
 set(SNITCH_TEST_PREFIX DIMCTests-)
 
 add_snitch_test(DIMC main.c)
+#add_snitch_test(DIMC-t-2 main2.c)

@@ -226,6 +226,7 @@ always @(*) begin
   static bit vrf_debug_enabled = 1'b1;
    
   if (vrf_debug_enabled) begin
+    /*
     // =====================
     // BANK SELECTION DEBUG
     // =====================
@@ -261,7 +262,7 @@ always @(*) begin
         end
       end
     end
-    
+    */
     // =====================
     // WRITE MONITOR
     // =====================
@@ -271,7 +272,52 @@ always @(*) begin
                  $time, port, waddr_i[port], wdata_i[port]);
       end
     end
-    
+   // Add this at the END of your spatz_vrf module, right before "endmodule"
+   // ========== VRF CONFIGURATION DEBUG ==========
+    `ifndef SYNTHESIS
+    initial begin
+    // Wait a bit after reset
+    #100;
+  
+    $display("\n[VRF_CONFIG_DEBUG] ==================================");
+    $display("[VRF_CONFIG_DEBUG] VRF Module: spatz_vrf");
+    $display("[VRF_CONFIG_DEBUG] Time: %0t", $time);
+    $display("[VRF_CONFIG_DEBUG] ==================================");
+  
+    // Check parameters from this module's scope
+    $display("[VRF_CONFIG_DEBUG] Local Parameters:");
+    $display("[VRF_CONFIG_DEBUG]   ELEN = %0d bits", ELEN);
+    $display("[VRF_CONFIG_DEBUG]   N_FU = %0d", N_FU);
+    $display("[VRF_CONFIG_DEBUG]   NrVRFBanks = %0d", NrVRFBanks);
+    $display("[VRF_CONFIG_DEBUG]   NrWordsPerBank = %0d", NrWordsPerBank);
+  
+    // Calculate sizes
+    $display("\n[VRF_CONFIG_DEBUG] Calculated Sizes:");
+    $display("[VRF_CONFIG_DEBUG]   Single VRF word = %0d bits", ELEN);
+    $display("[VRF_CONFIG_DEBUG]   v0 (LMUL=1) = %0d bits", ELEN);
+    $display("[VRF_CONFIG_DEBUG]   v0+v1 (LMUL=2) = %0d bits", 2*ELEN);
+    $display("[VRF_CONFIG_DEBUG]   v0+v1+v2+v3 (LMUL=4) = %0d bits", 4*ELEN);
+  
+    // Bank organization info
+    $display("\n[VRF_CONFIG_DEBUG] Bank Organization:");
+    $display("[VRF_CONFIG_DEBUG]   Each bank width = %0d bits", ELEN);
+    $display("[VRF_CONFIG_DEBUG]   Total banks = %0d", NrVRFBanks);
+    $display("[VRF_CONFIG_DEBUG]   Total VRF bits = %0d bits", NrVRFBanks * ELEN);
+  
+    // For DIMC planning
+    $display("\n[VRF_CONFIG_DEBUG] For 32×32-bit DIMC results:");
+    if (4*ELEN >= 1024) begin
+     $display("[VRF_CONFIG_DEBUG]   ? Need LMUL=%0d for 1024 bits", 1024/ELEN);
+     $display("[VRF_CONFIG_DEBUG]   ? Can store %0d × 32-bit elements", (4*ELEN)/32);
+    end else begin
+      $display("[VRF_CONFIG_DEBUG]   ? CANNOT store 1024 bits with LMUL=4");
+      $display("[VRF_CONFIG_DEBUG]   Need LMUL=%0d", 1024/ELEN);
+    end
+  
+    $ display("[VRF_CONFIG_DEBUG] ==================================\n");
+    end
+  `endif // SYNTHESIS
+// ========== END DEBUG ==========    
     // =====================
     // ERROR CONDITIONS
     // =====================

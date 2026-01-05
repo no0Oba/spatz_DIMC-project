@@ -11,31 +11,74 @@
 #define IMM3 0x02
 #define IMM4 0x03
 #define IMM5 0x000
-#define IMM6 0x080
-#define IMM7 0x100
-#define IMM8 0x180
+#define IMM6 0x280
+#define IMM7 0x500
+#define IMM8 0x780
 
 
-int Filter[8] = {42,43,44,45,46,47,48,49};
-int FilterCopy[8] = {0,0,0,0,0,0,0,0};
+int Filter[512] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+                2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,
+                4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
+                6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+                8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+                10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
+                11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,
+                12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,
+                13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,
+                14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,
+                15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,
+                16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
+                17,17,17,17,17,17,17,17,17,17,17,17,17,17,17,17,
+                18,18,18,18,18,18,18,18,18,18,18,18,18,18,18,18,
+                19,19,19,19,19,19,19,19,19,19,19,19,19,19,19,19,
+                20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,
+                21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,
+                22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,
+                23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,
+                24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,
+                25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,
+                26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,
+                27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,
+                28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,
+                29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,
+                30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,
+                31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31};
+int FilterCopy[512] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                       0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 
+                    };
 int vl;
 
 int *a;
 int *b;
-// Set vector length configuration (e32 = 32-bit elements, m8 = LMUL=8)
+
+// Set vector length configuration (e32 = 32-bit elements, m2 = LMUL=2)
 static inline void set_vector_length(int len) {
    
-    asm volatile("vsetvli %0, %1, e32, m8, ta, ma" : "=r"(vl) : "r"(len));
+    asm volatile("vsetvli %0, %1, e32, m2, ta, ma" : "=r"(vl) : "r"(len));
 }
 
 // Variant A: single in/out variable (rs1 == rd)
 static inline int dimc_single_F1(int x) {
     asm volatile(
     
-        ".insn i 0x6B, 1, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM1)
-    );
+        ".insn i 0x6B, 1, v0, v%0, %1"
+        :
+        : "i"(x), "I"(IMM1)  
+        : "v0"    );
 
     return x;
 }
@@ -44,35 +87,34 @@ static inline int dimc_single_F1(int x) {
 static inline int dimc_single_F2(int x) {
     asm volatile(
     
-        ".insn i 0x6B, 1, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM2)
-    );
+        ".insn i 0x6B, 1, v0, v%0, %1"
+        :
+        : "i"(x), "I"(IMM2)  
+        : "v0"    );
    
-    return x;
-}
+        return x;
+    }
 
-// Variant A: single in/out variable (rs1 == rd)
-static inline int dimc_single_F3(int x) {
-    asm volatile(
-    
-        ".insn i 0x6B, 1, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM3)
-    );
+    // Variant A: single in/out variable (rs1 == rd)
+    static inline int dimc_single_F3(int x) {
+        asm volatile(
+            
+            ".insn i 0x6B, 1, v0, v%0, %1"
+            :
+            : "i"(x), "I"(IMM3)  
+            : "v0"    );
 
-    return x;
-}
+        return x;
+    }
 
 // Variant A: single in/out variable (rs1 == rd)
 static inline int dimc_single_F4(int x) {
     asm volatile(
     
-        ".insn i 0x6B, 1, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM4)
-    );
-
+        ".insn i 0x6B, 1, v0, v%0, %1"
+        :
+        : "i"(x), "I"(IMM4)  
+        : "v0"    );
     
     return x;
 }
@@ -81,10 +123,10 @@ static inline int dimc_single_F4(int x) {
 static inline int dimc_single_K1(int x) {
     asm volatile(
     
-        ".insn i 0x6B, 2, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM1)
-    );
+        ".insn i 0x6B, 2, v0, v%0, %1"
+        :
+        : "i"(x), "I"(IMM1)  
+        : "v0"    );
 
     return x;
 }
@@ -93,40 +135,83 @@ static inline int dimc_single_K1(int x) {
 static inline int dimc_single_K2(int x) {
     asm volatile(
     
-        ".insn i 0x6B, 2, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM2)
-    );
+        ".insn i 0x6B, 2, v0, v%0, %1"
+        :
+        : "i"(x), "I"(IMM2)  
+        : "v0"    );
 
-    
     return x;
 }
 
-// Variant A: single in/out variable (rs1 == rd)
+// Variant A: single in/out variable (vs1 == vd)
 static inline int dimc_single_K3(int x) {
     asm volatile(
     
-        ".insn i 0x6B, 2, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM3)
-    );
+        ".insn i 0x6B, 2, v0, v%0, %1"
+        :
+        : "i"(x), "I"(IMM3)  
+        : "v0"    );
 
     return x;
 }
 
-// Variant A: single in/out variable (rs1 == rd)
 static inline int dimc_single_K4(int x) {
     asm volatile(
     
-        ".insn i 0x6B, 2, %0, %0, %1\n"
-        : "+r"(x)
-        : "I"(IMM4)
-    );
+        ".insn i 0x6B, 2, v0, v%0, %1"
+        :
+        : "i"(x), "I"(IMM4)  
+        : "v0"    );
 
-    
     return x;
 }
 
+
+
+// Variant B: distinct input and output variables (rs1 != rd)
+static inline void dimc_distinct_00(int in) {
+    // Any C variable is fine for rs1; only the immediate must be constant.
+    asm volatile(
+            ".insn i 0x6B, 4, v0, v%0, %1"
+        :
+        : "i"(in), "I"(IMM5)
+        : "v0"    
+    );
+}
+// Variant B: distinct input and output variables (rs1 != rd)
+static inline void dimc_distinct_01(int in) {
+    
+    // Any C variable is fine for rs1; only the immediate must be constant.
+    asm volatile(
+      ".insn i 0x6B, 4, v0, v%0, %1"
+        :
+        : "i"(in), "I"(IMM6)
+        : "v0"     // Clobber list must include v1 now    
+    );
+}
+// Variant B: distinct input and output variables (rs1 != rd)
+static inline void dimc_distinct_10(int in) {
+    // Any C variable is fine for rs1; only the immediate must be constant.
+    asm volatile(
+       ".insn i 0x6B, 4, v0, v%0, %1"
+        :
+        : "i"(in), "I"(IMM7)
+        : "v0"     // Clobber list must include v1 now    
+    );
+}
+
+// Variant B: distinct input and output variables (rs1 != rd)
+static inline void dimc_distinct_11(int in) {
+    // Any C variable is fine for rs1; only the immediate must be constant.
+    asm volatile(
+          ".insn i 0x6B, 5, v0, v%0, %1"
+        :
+        : "i"(in), "I"(IMM8)
+        : "v0"     // Clobber list must include v1 now    
+    );
+}
+
+/*
 // Variant B: distinct input and output variables (rs1 != rd)
 static inline int dimc_distinct_00(int in) {
     int out=0;
@@ -173,9 +258,6 @@ static inline int dimc_distinct_11(int in) {
     return out;
 }
 
-/*
-
-
 // Variant A: single in/out variable (rs1 == rd)
 static inline int dimc_single(int x) {
     asm volatile(
@@ -183,24 +265,85 @@ static inline int dimc_single(int x) {
         ".insn i 0x6B, 4, %0, %0, %1\n"
         : "+r"(x)
         : "I"(IMM)
-    );
-
-    
+    );    
     return x;
 }
-
 */
 
 // Function to load data into VRF (v0) using `vle32.v`
 static inline void load_to_vrf(int *src) {
     // Load 8 32-bit ints from Filter into v0 (VRF)
     asm volatile("vle32.v v0, (%0)" :: "r"(src));
+    asm volatile("vle32.v v1, (%0)" :: "r"(src+16)); 
+    asm volatile("vle32.v v2, (%0)" :: "r"(src+32));
+    asm volatile("vle32.v v3, (%0)" :: "r"(src+48)); 
+    asm volatile("vle32.v v4, (%0)" :: "r"(src+64));
+    asm volatile("vle32.v v5, (%0)" :: "r"(src+80)); 
+    asm volatile("vle32.v v6, (%0)" :: "r"(src+96));
+    asm volatile("vle32.v v7, (%0)" :: "r"(src+112)); 
+    asm volatile("vle32.v v8, (%0)" :: "r"(src+128));
+    asm volatile("vle32.v v9, (%0)" :: "r"(src+144));    
+    asm volatile("vle32.v v10, (%0)" :: "r"(src+160));
+    asm volatile("vle32.v v11, (%0)" :: "r"(src+176)); 
+    asm volatile("vle32.v v12, (%0)" :: "r"(src+192));
+    asm volatile("vle32.v v13, (%0)" :: "r"(src+208)); 
+    asm volatile("vle32.v v14, (%0)" :: "r"(src+224));
+    asm volatile("vle32.v v15, (%0)" :: "r"(src+240)); 
+    asm volatile("vle32.v v16, (%0)" :: "r"(src+256));
+    asm volatile("vle32.v v17, (%0)" :: "r"(src+272)); 
+    asm volatile("vle32.v v18, (%0)" :: "r"(src+288));
+    asm volatile("vle32.v v19, (%0)" :: "r"(src+304)); 
+    asm volatile("vle32.v v20, (%0)" :: "r"(src+320));
+    asm volatile("vle32.v v21, (%0)" :: "r"(src+336)); 
+    asm volatile("vle32.v v22, (%0)" :: "r"(src+352));
+    asm volatile("vle32.v v23, (%0)" :: "r"(src+368)); 
+    asm volatile("vle32.v v24, (%0)" :: "r"(src+384));
+    asm volatile("vle32.v v25, (%0)" :: "r"(src+400)); 
+    asm volatile("vle32.v v26, (%0)" :: "r"(src+416));
+    asm volatile("vle32.v v27, (%0)" :: "r"(src+432)); 
+    asm volatile("vle32.v v28, (%0)" :: "r"(src+448));
+    asm volatile("vle32.v v29, (%0)" :: "r"(src+464)); 
+    asm volatile("vle32.v v30, (%0)" :: "r"(src+480));
+    asm volatile("vle32.v v31, (%0)" :: "r"(src+496));
+
 }
 
 // Function to store data from VRF (v0) back to memory
 static inline void store_from_vrf(int *dst) {
     // Store 8 32-bit ints from v0 (VRF) into Filter
     asm volatile("vse32.v v0, (%0)" :: "r"(dst));
+    asm volatile("vse32.v v1, (%0)" :: "r"(dst+16));
+    asm volatile("vse32.v v2, (%0)" :: "r"(dst+32));
+    asm volatile("vse32.v v3, (%0)" :: "r"(dst+48));
+    asm volatile("vse32.v v4, (%0)" :: "r"(dst+64));
+    asm volatile("vse32.v v5, (%0)" :: "r"(dst+80));
+    asm volatile("vse32.v v6, (%0)" :: "r"(dst+96));
+    asm volatile("vse32.v v7, (%0)" :: "r"(dst+112));
+    asm volatile("vse32.v v8, (%0)" :: "r"(dst+128));
+    asm volatile("vse32.v v9, (%0)" :: "r"(dst+144));
+    asm volatile("vse32.v v10, (%0)" :: "r"(dst+160));
+    asm volatile("vse32.v v11, (%0)" :: "r"(dst+176));
+    asm volatile("vse32.v v12, (%0)" :: "r"(dst+192));
+    asm volatile("vse32.v v13, (%0)" :: "r"(dst+208));
+    asm volatile("vse32.v v14, (%0)" :: "r"(dst+224));
+    asm volatile("vse32.v v15, (%0)" :: "r"(dst+240));
+    asm volatile("vse32.v v16, (%0)" :: "r"(dst+256));
+    asm volatile("vse32.v v17, (%0)" :: "r"(dst+272));
+    asm volatile("vse32.v v18, (%0)" :: "r"(dst+288));
+    asm volatile("vse32.v v19, (%0)" :: "r"(dst+304));
+    asm volatile("vse32.v v20, (%0)" :: "r"(dst+320));
+    asm volatile("vse32.v v21, (%0)" :: "r"(dst+336));
+    asm volatile("vse32.v v22, (%0)" :: "r"(dst+352));
+    asm volatile("vse32.v v23, (%0)" :: "r"(dst+368));
+    asm volatile("vse32.v v24, (%0)" :: "r"(dst+384));
+    asm volatile("vse32.v v25, (%0)" :: "r"(dst+400));
+    asm volatile("vse32.v v26, (%0)" :: "r"(dst+416));
+    asm volatile("vse32.v v27, (%0)" :: "r"(dst+432));
+    asm volatile("vse32.v v28, (%0)" :: "r"(dst+448));
+    asm volatile("vse32.v v29, (%0)" :: "r"(dst+464));
+    asm volatile("vse32.v v30, (%0)" :: "r"(dst+480));
+    asm volatile("vse32.v v31, (%0)" :: "r"(dst+496));
+
 }
 
 int main() {
@@ -211,20 +354,19 @@ int main() {
     // Initialize matrices
     if (cid == 0) {
 
-        a = (int *)snrt_l1alloc(8 * sizeof(int));
-        b = (int *)snrt_l1alloc(8 * sizeof(int));
+        a = (int *)snrt_l1alloc(512 * sizeof(int));
+        b = (int *)snrt_l1alloc(512 * sizeof(int));
         
-        snrt_dma_start_1d(a, Filter, 8 * sizeof(int));
-        snrt_dma_start_1d(b, FilterCopy, 8 * sizeof(int));
+        snrt_dma_start_1d(a, Filter, 512 * sizeof(int));
+        snrt_dma_start_1d(b, FilterCopy, 512 * sizeof(int));
         snrt_dma_wait_all();
     }
 
     // Wait for all cores to finish
     snrt_cluster_hw_barrier();
 
-
      // Set vector length and configuration (Example: using Filter's size)
-    set_vector_length(8);
+    set_vector_length(16);
 
     // Load data from memory to VRF (v0)
     load_to_vrf(a);
@@ -236,14 +378,14 @@ int main() {
 
     // Verify the stored data (for demonstration purposes)
     printf("Filter after DIMC and store:\n");
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 32; i++) {
         printf("[%d] original=%d  copy=%d\n", i, a[i], b[i]);
     }
 
     printf("Configured VL = %d\n", vl);
-    
-     int val = 0;
-     int val2= 2;
+
+     int val = 18;
+     int val2= 1;
     int r1 = dimc_single_F1(val);
     int r2 = dimc_single_F2(val);
     int r5 = dimc_single_K1(val);
@@ -258,182 +400,18 @@ int main() {
     
     // Wait for completion before issuing more
     //snrt_cluster_hw_barrier();  // Hardware barrier
-    int r9 = dimc_distinct_00(val);
-    int r10 = dimc_distinct_01(val);
-    int r11 = dimc_distinct_10(val);    
-    int r12 = dimc_distinct_11(val);
+    dimc_distinct_00(val);
+    dimc_distinct_01(val);
+    dimc_distinct_10(val); 
+    dimc_distinct_11(val2);
 
     // printf("DIMC test: IMM=0x%x (val=%d) -> single=%d, distinct=%d\n",
     //        IMM, val, r1, r2);
 
-    printf("DIMC test: IMM=0x (val=%d) -> single=%d, distinct=%d\n", val, r1, r2);
+    //printf("DIMC test: IMM=0x (val=%d) -> single=%d, distinct=%d\n", val, r1, r2);
    
 
     return 0;
 }
 
 
-/*
-#include <stdio.h>
-#include "printf.h"
-#include <snrt.h>
-
-int main() {
-    const unsigned int cid = snrt_cluster_core_idx();
-
-    int *vrf_row0 = (int *)snrt_l1alloc(sizeof(int));
-    *vrf_row0 = 22;
-
-    snrt_cluster_hw_barrier();
-
-    asm volatile("vle32.v v0, (%0)" :: "r"(vrf_row0)); // load VRF row 0
-
-    int result;
-    asm volatile(
-        ".insn i 0x6B, 4, %0, %1, %2\n"
-        : "=r"(result)
-        : "r"(0),       // rs1 = VRF row index 0
-          "I"(0x24)      // immediate: row 0, sec 0, flags 0
-    );
-
-    printf("DIMC read value: %d\n", result);
-
-    return 0;
-}
-*/
-
-/*
-#include <stdio.h>
-#include "printf.h"
-#include <snrt.h>
-
-#define IMM 0x25
-
-int main() {
-    const unsigned int cid = snrt_cluster_core_idx();
-
-    static int src_value = 22;   // stable in memory
-    int *l1_row0 = NULL;
-
-    if (cid == 0) {
-        l1_row0 = (int *)snrt_l1alloc(sizeof(int));
-        // DMA from main memory into L1 so vle32.v can read it
-        snrt_dma_start_1d(l1_row0, &src_value, sizeof(int));
-        snrt_dma_wait_all();
-        printf("cid=%d src_addr=%p l1_addr=%p\n", cid, (void*)&src_value, (void*)l1_row0);
-    }
-
-    // sync all cores
-    snrt_cluster_hw_barrier();
-
-    // load L1 buffer into VRF row 0 (v0)
-    asm volatile("vle32.v v0, (%0)" :: "r"(l1_row0));
-
-    // small barrier to ensure VRF write completes before DIMC read
-    snrt_cluster_hw_barrier();
-
-    // Call DIMC with rs1 = 0 (VRF row 0)
-    int dimc_out;
-    asm volatile(
-        ".insn i 0x6B, 4, %0, %1, %2\n"
-        : "=r"(dimc_out)
-        : "r"(0),     // rs1 = VRF row index 0  <-- VERY IMPORTANT
-          "I"(IMM)    // immediate for DIMC config
-    );
-
-    printf("DIMC read value: %d\n", dimc_out);
-
-    // Optional: store VRF back to L1 and print to confirm
-    int *out_l1 = (int *)snrt_l1alloc(sizeof(int));
-    asm volatile("vse32.v v0, (%0)" :: "r"(out_l1));
-    snrt_cluster_hw_barrier();
-    if (cid == 0) {
-      printf("VRF row0 -> L1 value = %d\n", *out_l1);
-    }
-
-    return 0;
-}
-*/
-
-
-/*
-#include <stdio.h>
-#include "printf.h"
-#include <snrt.h>
-
-int main() {
-    const unsigned int cid = snrt_cluster_core_idx();
-
-    int *vrf_row0 = (int *)snrt_l1alloc(sizeof(int));
-    *vrf_row0 = 22;
-
-    snrt_cluster_hw_barrier();
-
-    asm volatile("vle32.v v0, (%0)" :: "r"(vrf_row0)); // load VRF row 0
-
-    int result;
-    asm volatile(
-        ".insn i 0x6B, 4, %0, %1, %2\n"
-        : "=r"(result)
-        : "r"(0),       // rs1 = VRF row index 0
-          "I"(0x24)      // immediate: row 0, sec 0, flags 0
-    );
-
-    printf("DIMC read value: %d\n", result);
-
-    return 0;
-}
-*/
-
-/*
-#include <stdio.h>
-#include "printf.h"
-#include <snrt.h>
-
-#define IMM 0x25
-
-int main() {
-    const unsigned int cid = snrt_cluster_core_idx();
-
-    static int src_value = 22;   // stable in memory
-    int *l1_row0 = NULL;
-
-    if (cid == 0) {
-        l1_row0 = (int *)snrt_l1alloc(sizeof(int));
-        // DMA from main memory into L1 so vle32.v can read it
-        snrt_dma_start_1d(l1_row0, &src_value, sizeof(int));
-        snrt_dma_wait_all();
-        printf("cid=%d src_addr=%p l1_addr=%p\n", cid, (void*)&src_value, (void*)l1_row0);
-    }
-
-    // sync all cores
-    snrt_cluster_hw_barrier();
-
-    // load L1 buffer into VRF row 0 (v0)
-    asm volatile("vle32.v v0, (%0)" :: "r"(l1_row0));
-
-    // small barrier to ensure VRF write completes before DIMC read
-    snrt_cluster_hw_barrier();
-
-    // Call DIMC with rs1 = 0 (VRF row 0)
-    int dimc_out;
-    asm volatile(
-        ".insn i 0x6B, 4, %0, %1, %2\n"
-        : "=r"(dimc_out)
-        : "r"(0),     // rs1 = VRF row index 0  <-- VERY IMPORTANT
-          "I"(IMM)    // immediate for DIMC config
-    );
-
-    printf("DIMC read value: %d\n", dimc_out);
-
-    // Optional: store VRF back to L1 and print to confirm
-    int *out_l1 = (int *)snrt_l1alloc(sizeof(int));
-    asm volatile("vse32.v v0, (%0)" :: "r"(out_l1));
-    snrt_cluster_hw_barrier();
-    if (cid == 0) {
-      printf("VRF row0 -> L1 value = %d\n", *out_l1);
-    }
-
-    return 0;
-}
-*/

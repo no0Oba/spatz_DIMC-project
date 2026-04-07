@@ -38,34 +38,6 @@ module spatz_decoder
   // New spatz request from decoded instruction
   spatz_req_t spatz_req;
 
-  /*
-  // Pipeline to delay vd by 4 cycles
-  logic [4:0] vd_pipe [3:0];  // 4-stage pipeline for vd
-  
-  ////////////////
-  // vd Pipeline //
-  ////////////////
-  
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      for (int i = 0; i < 4; i++) begin
-        vd_pipe[i] <= '0;
-      end
-    end else begin
-      // Shift pipeline when a new DIMC instruction is decoded
-      if (decoder_req_valid_i && decoder_req_i.instr inside {
-          riscv_instr::DIMC_INSTR_LD_F,
-          riscv_instr::DIMC_INSTR_LD_K,
-          riscv_instr::DIMC_INSTR_DPS,
-          riscv_instr::DIMC_INSTR_DSS}) begin
-        vd_pipe[0] <= decoder_req_i.instr[11:7];  // Capture new vd
-        for (int i = 1; i < 4; i++) begin
-          vd_pipe[i] <= vd_pipe[i-1];             // Shift vd down the pipeline
-        end
-      end
-    end
-  end
-  */
   
   /////////////
   // Decoder //
@@ -1279,7 +1251,8 @@ module spatz_decoder
           endcase
         end
         
-         // DIMC INSTRUCTION HERE
+         // DIMC INSTRUCTION HERE         // DIMC INSTRUCTION HERE
+
          
           // Example: DIMC variants (I-type style immediate)
           riscv_instr::DIMC_INSTR_LD_F,
@@ -1287,59 +1260,100 @@ module spatz_decoder
           riscv_instr::DIMC_INSTR_DPS,
           riscv_instr::DIMC_INSTR_DSS: begin 
 
-          // decode standard I-type fields
-          automatic logic [11:0] imm12 = decoder_req_i.instr[31:20];    // 12-bit immediate
-          automatic logic [4:0]  vs1   = decoder_req_i.instr[19:15];    // source (here: VRF row index)
-          automatic logic [2:0]  funct3= decoder_req_i.instr[14:12];
-          automatic logic [4:0]  vd    = decoder_req_i.instr[11:7];
+           // decode standard I-type fields
+           automatic logic [11:0] imm12 = decoder_req_i.instr[31:20];    // 12-bit immediate
+           automatic logic [4:0]  vs1   = decoder_req_i.instr[19:15];    // source (here: VRF row index)
+           automatic logic [2:0]  funct3= decoder_req_i.instr[14:12];
+           automatic logic [4:0]  vd    = decoder_req_i.instr[11:7];
 
           
-          // Common request setup for DIMC
-          spatz_req.op       = DIMC_OP;        // the single DIMC_OP and use subfields below
-          spatz_req.ex_unit  = VFU;            // existing placeholder used VFU; adjust if you implement a dedicated unit
-          spatz_req.vd       = vd;             // vd_pipe[3]
-          spatz_req.use_rd   = 1'b0;           // set to 1 if rd should be written back
-          spatz_req.vs1      = vs1;            // row index of VRF (0..31) — use this to pick the VRF row
-          spatz_req.use_vs1  = 1'b1;           // ✅ READ FROM VRF!
-          spatz_req.vtype.vsew = EW_32;        // set element width as appropriate for your DIMC op
+           // Common request setup for DIMC
+           spatz_req.op       = DIMC_OP;        // the single DIMC_OP and use subfields below
+           spatz_req.ex_unit  = VFU;            // existing placeholder used VFU; adjust if you implement a dedicated unit
+           spatz_req.vd       = vd;             // vd_pipe[3]
+           spatz_req.use_rd   = 1'b0;           // set to 1 if rd should be written back
+           spatz_req.vs1      = vs1;            // row index of VRF (0..31) — use this to pick the VRF row
+           spatz_req.use_vs1  = 1'b1;           // ✅ READ FROM VRF!
+           spatz_req.vtype.vsew = EW_32;        // set element width as appropriate for your DIMC op
 
-          // subfields: interpret imm12 bits to encode arguments (example layout)
-          // (You must pick a layout consistent with your .insn encoding.)
-          // Example encoding (one possibility):
-          //   imm12[4:0] = k_row (5 bits)         -> k_row = 5 -> imm12[4:0] = 5
-          //   imm12[6:5] = sec  (2 bits)         -> sec = 2 -> imm12[6:5] = 2
-          //   imm12[11:7] = reserved / small addr or flags
-          spatz_req.op_cfg.dimc.k_row = imm12[6:2];   // k-row
-          spatz_req.op_cfg.dimc.sec   = imm12[1:0];   // section / sec value
-          spatz_req.op_cfg.dimc.flags = imm12[11:7];  // extra flags / address nibble (if needed)
+           // subfields: interpret imm12 bits to encode arguments (example layout)
+           // (You must pick a layout consistent with your .insn encoding.)
+           // Example encoding (one possibility):
+           //   imm12[4:0] = k_row (5 bits)         -> k_row = 5 -> imm12[4:0] = 5
+           //   imm12[6:5] = sec  (2 bits)         -> sec = 2 -> imm12[6:5] = 2
+           //   imm12[11:7] = reserved / small addr or flags
+           spatz_req.op_cfg.dimc.k_row = imm12[6:2];   // k-row
+           spatz_req.op_cfg.dimc.sec   = imm12[1:0];   // section / sec value
+           spatz_req.op_cfg.dimc.flags = imm12[11:7];  // extra flags / address nibble (if needed)
+           spatz_req.op_cfg.dimc.mode  = 7'd0; // no funct7 for I-type
 
-
-         // Where you decode the instruction
-         $display("[DIMC_INSTR] Time %t: vd=v%0d, vs1=v%0d, imm12=0x%h", 
-         $time, vd, vs1, imm12);
+           // Where you decode the instruction
+           /*$display("[DIMC_INSTR] Time %t: vd=v%0d, vs1=v%0d, imm12=0x%h", 
+           $time, vd, vs1, imm12);*/
   
-          // Variant-specific tweaks using casez (similar style to DIV/REM decode)
-          unique casez (decoder_req_i.instr)
-            riscv_instr::DIMC_INSTR_LD_K: begin
-              spatz_req.op_cfg.dimc.cmd = DIMC_CMD_LD_K;
-              spatz_req.use_rd          = 1'b0; // LD_K likely doesn’t write integer rd
-            end
+           // Variant-specific tweaks using casez (similar style to DIV/REM decode)
+           unique casez (decoder_req_i.instr)
+             riscv_instr::DIMC_INSTR_LD_K: begin
+               spatz_req.op_cfg.dimc.cmd = DIMC_CMD_LD_K;
+               spatz_req.use_rd          = 1'b0; // LD_K likely doesn’t write integer rd
+             end
 
-            riscv_instr::DIMC_INSTR_LD_F: begin
+             riscv_instr::DIMC_INSTR_LD_F: begin
               spatz_req.op_cfg.dimc.cmd = DIMC_CMD_LD_F;
-            end
+             end
 
-            riscv_instr::DIMC_INSTR_DPS: begin
+             riscv_instr::DIMC_INSTR_DPS: begin
               spatz_req.op_cfg.dimc.cmd = DIMC_CMD_DPS;
-            end
+             end
             
-            default: begin
+             default: begin
               spatz_req.op_cfg.dimc.cmd = DIMC_CMD_DSS;
-            end
-          endcase
-          // any additional fields required by your DIMC execution unit:
-          // - if DIMC needs an effective address or extra register, set spatz_req.rs2 or spatz_req.rsD
-          // - set spatz_req.op_cfg.reset_vstart = 1'b0; if you want to preserve vstart
+             end
+            endcase
+           // any additional fields required by your DIMC execution unit:
+           // - if DIMC needs an effective address or extra register, set spatz_req.rs2 or spatz_req.rsD
+           // - set spatz_req.op_cfg.reset_vstart = 1'b0; if you want to preserve vstart
+          end
+          
+          // ======================================================
+          // DIMC R-type instructions (vd, vs1, vs2)
+          // ======================================================
+          riscv_instr::DIMC_INSTR_MACVV: begin
+
+            // R-type decode
+            automatic logic [6:0] funct7 = decoder_req_i.instr[31:25];
+            automatic logic [4:0] vs2    = decoder_req_i.instr[24:20];
+            automatic logic [4:0] vs1    = decoder_req_i.instr[19:15];
+            automatic logic [2:0] funct3 = decoder_req_i.instr[14:12];
+            automatic logic [4:0] vd     = decoder_req_i.instr[11:7];
+
+            // Common DIMC request
+            spatz_req.op        = DIMC_OP;
+            spatz_req.ex_unit   = VFU;          // or DIMC unit later
+            spatz_req.vd        = vd;
+            spatz_req.vs1       = vs1;
+            spatz_req.vs2       = vs2;
+
+            spatz_req.use_vs1   = 1'b1;
+            spatz_req.use_vs2   = 1'b1;
+            spatz_req.use_rd    = 1'b0;          // VRF destination, not scalar
+
+            spatz_req.vtype.vsew = EW_32;
+
+            // DIMC-specific command
+            spatz_req.op_cfg.dimc.cmd = DIMC_CMD_MACVV;
+
+            // Optional: funct7 sub-modes
+            spatz_req.op_cfg.dimc.ci = funct3;
+            // Optional: funct7 sub-modes
+            spatz_req.op_cfg.dimc.mode = funct7;
+            // k_row/sec/flags unused for R-type
+            spatz_req.op_cfg.dimc.k_row = 5'd0;
+            spatz_req.op_cfg.dimc.sec   = 2'd0;
+            spatz_req.op_cfg.dimc.flags = 5'd0;
+
+            /*$display("[DIMC_MACVV] t=%0t vd=v%0d vs1=v%0d vs2=v%0d",
+                      $time, vd, vs1, vs2);*/
           end
 
         // Scalar division
@@ -1871,38 +1885,7 @@ module spatz_decoder
     end // Instruction valid
   end : decoder
 
-/*
-  // Create a modified version of spatz_req for output
-  spatz_req_t spatz_req_modified;
-  
-  always_comb begin
-    spatz_req_modified = spatz_req;
-    
-    // Only modify vd for DIMC instructions
-    if (spatz_req.op == DIMC_OP) begin
-      spatz_req_modified.vd = vd_pipe[2];
-    end
-  end
 
-   // DEBUG PRINTS
-  always @(posedge clk_i) begin
-    if (decoder_req_valid_i) begin
-      $display("[DECODER] Time %0t: Instruction = %08h, original_vd = %02d", 
-               $time, decoder_req_i.instr, decoder_req_i.instr[11:7]);
-      
-      if (decoder_req_i.instr inside {
-          riscv_instr::DIMC_INSTR_LD_F,
-          riscv_instr::DIMC_INSTR_LD_K,
-          riscv_instr::DIMC_INSTR_DPS,
-          riscv_instr::DIMC_INSTR_DSS}) begin
-        $display("[DECODER]   DIMC detected! opcode=%0d, spatz_req.vd=%0d, spatz_req_modified.vd=%0d",
-                 spatz_req.op, spatz_req.vd, spatz_req_modified.vd);
-        $display("[DECODER]   Pipeline: vd_pipe[0]=%0d, [1]=%0d, [2]=%0d, [3]=%0d",
-                 vd_pipe[0], vd_pipe[1], vd_pipe[2], vd_pipe[3]);
-      end
-    end
-  end
-*/
   // Check if rsp valid and assign spatz_req
   assign decoder_rsp_o.spatz_req     = spatz_req; //DIMC edit due to delay before spatz_req_modified
   assign decoder_rsp_o.instr_illegal = decoder_req_valid_i & illegal_instr;

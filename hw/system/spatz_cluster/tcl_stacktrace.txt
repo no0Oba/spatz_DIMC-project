@@ -1,0 +1,67 @@
+Sun Dec 14 05:59:00 CET 2025
+Trace back: window ".main_pane.wave" isn't a top-level window
+    while executing
+"wm geometry $frame_name"
+    (object "::.main_pane.wave" method "::mtiwidgets::WindowObj::_UnDock" body line 98)
+    invoked from within
+"$windowobj _UnDock"
+    (object "::.windowmgr" method "::mtiwidgets::WindowMgr::UnDock" body line 31)
+    invoked from within
+"UnDock $windowobj $geometry $suppress_error"
+    (object "::.windowmgr" method "::mtiwidgets::WindowMgr::ToggleDock" body line 16)
+    invoked from within
+"::.windowmgr ToggleDock .main_pane.wave"
+    (in namespace inscope "::mtiwidgets::WindowMgr" script line 1)
+    invoked from within
+"namespace inscope ::mtiwidgets::WindowMgr {::.windowmgr ToggleDock .main_pane.wave}"
+    invoked from within
+".main_pane.wave.interior.header.btns.expel invoke"
+    ("uplevel" body line 1)
+    invoked from within
+"uplevel #0 [list $w invoke]"
+    (procedure "tk::ButtonUp" line 22)
+    invoked from within
+"tk::ButtonUp .main_pane.wave.interior.header.btns.expel"
+    (command bound to event)
+  <2:/sw/CAD/Siemens/questa/2024.3/questasim/linux_x86_64/tk8.6/bgerror.tcl:106: ::tkerror {window ".main_pane.wave" isn't a top-level window}
+  <1:eval:1: ::tk::dialog::error::bgerror {window ".main_pane.wave" isn't a top-level window}
+Tue Feb 24 14:07:56 CET 2026
+Trace back: can't unset "::wait_for_it": no such variable
+    while executing
+"unset ::wait_for_it"
+    (object "::.main_pane.source1.interior.cs.body.srcobj" method "::vsimwidgets::Srcobj::ExecBusyCmd" body line 15)
+    invoked from within
+"$_srcedit ExecBusyCmd $timeout $msg"
+    (object "::.main_pane.source1.interior.cs.body.srcobj.extra_f.drivers" method "::vsimwidgets::Srcedit::ResultsWidget::_update" body line 52)
+    invoked from within
+"::.main_pane.source1.interior.cs.body.srcobj.extra_f.drivers _update -data {{{sim:/tb_bin/i_dut/i_cluster_wrapper/i_cluster/gen_core[0]/i_spatz_cc/i_s..."
+    ("eval" body line 1)
+    invoked from within
+"eval $o _update $args"
+    (procedure "::vsimwidgets::Srcedit::ResultsWidget::Update" body line 10)
+    invoked from within
+"vsimwidgets::Srcedit::ResultsWidget::Update  -data $DriverList -signal $sig -from $d_or_r -nofilter"
+    (procedure "::SourceEdit::MultipleDriverDialog" line 33)
+    invoked from within
+"::SourceEdit::MultipleDriverDialog $sig $DriverList $drivers_or_readers"
+    (procedure "::SourceEdit::HandleDrivers" line 87)
+    invoked from within
+"::SourceEdit::HandleDrivers [lindex $sigList 0] $d_or_r"
+    (procedure "_showDFReadersDrivers" line 41)
+    invoked from within
+"_showDFReadersDrivers drivers .main_pane.wave.interior.cs.body.pw.wf 1"
+    ("eval" body line 1)
+    invoked from within
+"eval _showDFReadersDrivers "drivers" $winname $classic $args"
+    (procedure "Wave::ShowDFDrivers" line 2)
+    invoked from within
+"Wave::ShowDFDrivers $top 1"
+    (procedure "Wave::1Up" line 27)
+    invoked from within
+"Wave::1Up $widget $x $y"
+    (procedure "Wave::SelectUp" line 4)
+    invoked from within
+"Wave::SelectUp	 .main_pane.wave.interior.cs.body.pw.wf.grid.row0,wave.data 854 493 1304 727 "
+    (command bound to event)
+  <2:/srv/netapp/sw/CAD/Siemens/questa/2024.3/questasim/linux_x86_64/tk8.6/bgerror.tcl:106: ::tkerror {can't unset "::wait_for_it": no such variable}
+  <1:eval:1: ::tk::dialog::error::bgerror {can't unset "::wait_for_it": no such variable}

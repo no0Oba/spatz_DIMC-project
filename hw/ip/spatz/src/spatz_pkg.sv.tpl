@@ -173,11 +173,12 @@ package spatz_pkg;
   // DIMC config / commands
   // ------------------------
   // DIMC command encoding used by decoder (values must match decoder writes)
-  typedef enum logic [1:0] {
-    DIMC_CMD_LD_K = 2'd0,
-    DIMC_CMD_LD_F = 2'd1,
-    DIMC_CMD_DPS  = 2'd2,
-    DIMC_CMD_DSS  = 2'd3 
+  typedef enum logic [2:0] {
+    DIMC_CMD_LD_K = 3'd0,
+    DIMC_CMD_LD_F = 3'd1,
+    DIMC_CMD_DPS  = 3'd2,
+    DIMC_CMD_DSS  = 3'd3,
+    DIMC_CMD_MACVV = 3'd4  
   } dimc_cmd_e;
 
   // Per-instruction DIMC configuration carried through spatz_req.op_cfg.dimc
@@ -185,6 +186,8 @@ package spatz_pkg;
     logic [4:0]    k_row;   // imm[4:0] (adjust if your imm slices differ)
     logic [1:0]    sec;     // imm[6:5]
     logic [4:0]    flags;   // imm[11:7] (extra flags / small immediate)
+    logic [6:0]    mode;    // I-type: packed imm OR R-type: funct7
+    logic [2:0]    ci;      // R-type: funct3
     dimc_cmd_e     cmd;     // command variant (LD_K / LD_F / DPS / DSS)
   } dimc_cfg_t;
 

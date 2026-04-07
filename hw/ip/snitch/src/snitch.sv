@@ -2452,7 +2452,20 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           illegal_inst = 1'b1;
         end
       end
-
+      // 2 source register (rs1,rs2)
+      riscv_instr::DIMC_INSTR_MACVV: begin
+        if (RVV) begin
+          write_rd        = 1'b0;
+          uses_rd         = 1'b0;
+          acc_qvalid_o    = valid_instr && !acc_mem_stall;
+          opa_select      = Reg;
+          opb_select      = Reg;
+          acc_register_rd = 1'b0;
+        end else begin
+          illegal_inst = 1'b1;
+        end
+      end
+      
       // 1 source register (rs1)
       riscv_instr::VADD_VX,
       riscv_instr::VSUB_VX,

@@ -64,11 +64,11 @@ module spatz_vfu
     logic last;             //Final operation flag for multi-element instructions
 
     // Is this a narrowing instruction?
-    logic narrowing;        //Narrowing operation flag (e.g., 64b→32b conversion)
+    logic narrowing;        //Narrowing operation flag (e.g., 64b?32b conversion)
     logic narrowing_upper;  //Upper/lower half selector for narrowing operations
 
     // Is this a reduction?
-    logic reduction;        //Reduction operation flag (vector→scalar operations)
+    logic reduction;        //Reduction operation flag (vector?scalar operations)
   } vfu_tag_t;
 
   ///////////////////////
@@ -97,6 +97,23 @@ module spatz_vfu
   //  Control  //
   ///////////////
 
+  // IME FSM
+  typedef enum logic [2:0] {
+    MACVV_IDLE,
+    MACVV_LOAD_FEATURE,
+    MACVV_LOAD_KERNEL,
+    MACVV_COMPUTE,
+    MACVV_WRITE_RESULTS
+  } macvv_state_t;
+
+  macvv_state_t macvv_state_d, macvv_state_q;
+  logic [2:0] macvv_feature_load_count;
+  logic [5:0] macvv_kernel_load_count;
+  logic [3:0] macvv_compute_counter;  // For 8 computations
+  logic [3:0] macvv_result_counter;
+  logic macvv_loading_active;
+  logic macvv_instruction_active;  // Flag that stays high until MACVV completes
+  
   // Vector length counter
   vlen_t vl_q, vl_d;
   `FF(vl_q, vl_d, '0)
@@ -121,12 +138,6 @@ module spatz_vfu
   // Propagate the tags through the functional units
   vfu_tag_t ipu_result_tag, fpu_result_tag, dimc_result_tag, result_tag; //DIMC result tag
   vfu_tag_t input_tag;
-
-/*
-  assign result_tag = (state_q == VFU_RunningIPU) ? ipu_result_tag :
-                      (state_q == VFU_RunningFPU) ? fpu_result_tag :
-                      dimc_result_tag; // Propagate the tags for DIMC
-*/
 
   // Number of words advanced by vstart
   vlen_t vstart;
@@ -192,7 +203,27 @@ module spatz_vfu
   logic reduction_done;
 
   //DIMC PSOUT INDEX TRACK
-  logic [2:0] current_element_idx;
+  logic [2:0]   current_element_idx;
+  logic [2:0]   dimc_element_sel;
+
+  logic compute_pulse;
+  // DIMC Loop Mode Control
+  logic         dimc_loop_mode;
+  logic [5:0]   start_counter;      // Counts started computations (0-31)
+  logic [5:0]   result_counter;     // Counts received results (0-31)
+  logic         comp_active;        // Active while starting computations
+  logic         dimc_loop_active;   // Active while processing loop
+  logic [255:0] dimc_buffer;        // 32×8-bit old buffer32×32-bit buffer
+  logic [255:0] dimc_buffer_psin;   // 32×8-bit old buffer32×32-bit input-buffer
+  logic [255:0] dimc_buffer_psin_2; // 32×8-bit old buffer32×32-bit input-buffer
+  logic [2:0]   buffer_idx;         // [4:0] old Current buffer index
+  logic [2:0]   psin_buffer_idx;    // [4:0] old Current buffer index
+  logic [1:0]   psin_chunk_idx;      // Which PSIN chunk (0-3)
+  logic         psin_write;        // Trigger for 256-bit VRF write
+  logic         burst_write;        // Trigger for 256-bit VRF write
+  logic [1:0]   vrf_chunk_idx;      // Which VRF chunk (0-3)
+  logic [N_FU*ELEN-1:0] dimc_result_wide;// Create 256-bit result with 32-bit element in correct position
+  logic         fifo_head_is_loop;
   
   // Are we producing the upper or lower part of the results  of a narrowing instruction?
   logic narrowing_upper_d, narrowing_upper_q;
@@ -288,20 +319,26 @@ module spatz_vfu
               stall   = 1'b1;
             end
           end else begin
-            // Handle back-to-back DIMC instructions
-              if (is_dimc_busy) begin
-                stall = 1'b1;  // Wait if DIMC is still busy
+           // Back-to-back DIMC instructions
+            if (is_dimc_busy) begin
+            stall = 1'b1;
+             // spatz_req_ready = 1'b0;  // <-- EXPLICITLY NOT READY
+            end else begin
+              // Ready for next DIMC instruction ONLY if:
+              // 1. DIMC unit is not busy
+              // 2. No MACVV in progress (MACVV has its own multi-cycle FSM)
+              // 3. FIFO has space for new instruction IME
+              if (macvv_state_q == MACVV_IDLE && !comp_active && !dimc_loop_active) begin
+                //spatz_req_ready = 1'b1;
+                state_d = VFU_RunningDIMC;
               end else begin
-              // Ready for next DIMC instruction
-              spatz_req_ready = 1'b1;  // Accept new instruction
-              // ADD THIS CRITICAL LINE: Reset state for new instruction
-              // When current DIMC instruction is done and we accept new one,
-              // we need to "re-enter" the DIMC state
-              state_d = VFU_RunningDIMC;  // This ensures fresh state entry
-            end  
+                stall = 1'b1;
+              
+              end
+            end   
           end
         end
-        
+
         default:;
       endcase
     end
@@ -309,7 +346,10 @@ module spatz_vfu
       // Finished the execution!
   if (spatz_req_valid && 
       (((vl_d >= spatz_req.vl && !spatz_req.op_arith.is_reduction) || reduction_done) ||
-       (is_dimc_insn && (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K} || !is_dimc_busy)))) begin
+       (is_dimc_insn && (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K} ||
+       (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS}&&(result_counter == 6'd32||spatz_req.vs1[0] == 1'b0))||
+       ((!is_dimc_busy && !spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_MACVV} && macvv_state_q == MACVV_IDLE)||
+       (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_MACVV} && burst_write )))))) begin //IME
     spatz_req_ready         = spatz_req_valid;
     busy_d                  = 1'b0;
     vl_d                    = '0;
@@ -343,23 +383,6 @@ module spatz_vfu
     
 
   end: control_proc
-
- // ========== SEPARATE DEBUG BLOCKS ==========
- /*
- // Add debug prints
- always @(posedge clk_i) begin
-  if (state_q == VFU_RunningDIMC) begin
-    $display("[DIMC WRITE] Time %t: element_sel=%0d, wbe=%08h, data[%0d]=0x%08h",
-              $time, 
-              dimc_element_sel, 
-              vreg_wbe,
-              dimc_element_sel,
-              dimc_32bit_result);
-  end
- end
- */
- // ========== CONTINUE WITH EXISTING CODE ==========
-
 
   //////////////
   // Operands //
@@ -618,7 +641,7 @@ module spatz_vfu
   vrf_be_t       vreg_wbe;
   logic          vreg_we;
   logic    [2:0] vreg_r_req;
-
+  
   // Address register
   vrf_addr_t [2:0] vreg_addr_q, vreg_addr_d;
   `FF(vreg_addr_q, vreg_addr_d, '0)
@@ -643,6 +666,7 @@ module spatz_vfu
       reduction      : spatz_req.op_arith.is_reduction
     };
 
+    
     if (spatz_req_valid && vl_q == '0) begin
       vreg_addr_d[0] = (spatz_req.vs2 + vstart) << $clog2(NrWordsPerVector);
       vreg_addr_d[1] = (spatz_req.vs1 + vstart) << $clog2(NrWordsPerVector);
@@ -664,65 +688,51 @@ module spatz_vfu
       vreg_addr_d[1] = vreg_addr_q[1] + (!spatz_req.op_arith.widen_vs1 || widening_upper_q);
       vreg_addr_d[2] = vreg_addr_q[2] + (!spatz_req.op_arith.is_reduction && (!spatz_req.op_arith.is_narrowing || narrowing_upper_q));
     end
+    // OVERRIDE FOR MACVV LOADING IME
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV || macvv_instruction_active) begin
+      if (macvv_state_q == MACVV_LOAD_FEATURE) begin
+        // Feature loading: vs1 + feature_load_count
+        vrf_raddr_o[2] = (spatz_req.vd  << $clog2(NrWordsPerVector)); //6'h3E
+        vrf_raddr_o[1] = ((spatz_req.vs1  << $clog2(NrWordsPerVector)) + macvv_feature_load_count);
+      end
+      else if (macvv_state_q == MACVV_LOAD_KERNEL) begin
+        // Kernel loading: vs2 + kernel_load_count
+        vrf_raddr_o[0] = ((spatz_req.vs2  << $clog2(NrWordsPerVector))+ macvv_kernel_load_count);
+      end
+    end
+
+    if (spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K} && spatz_req.op_cfg.dimc.flags[0]== 1) begin
+        vrf_raddr_o[1] = ((spatz_req.vs1  << $clog2(NrWordsPerVector)) + 1);
+    end
+    
+     // OVERRIDE FOR PSIN
+    if (compute_pulse && spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS}) begin
+      if (dimc_loop_mode) begin
+        // align the address
+        vrf_raddr_o[2] = ((spatz_req.vd  << $clog2(NrWordsPerVector))+psin_chunk_idx); //6'h3E
+          if (psin_write) begin
+              if (spatz_req.vs1[1] == 1'b1) begin
+                dimc_buffer_psin_2 = vrf_rdata_i[2];
+              end else begin //check and make 0 if partial sum not need to be added
+                dimc_buffer_psin_2 = '0;
+              end
+          end 
+      end
+    end
+
+
   end: vreg_addr_proc
 
-  always_comb begin : operand_req_proc
-    vreg_r_req = '0;
-    vreg_we    = '0;
-    vreg_wbe   = '0;
+  // ===== SIGNAL DECLARATIONS FOR VRF WRITE DATA =====
+  logic [N_FU*ELEN-1:0] vreg_wdata;  // For FU results (IPU/FPU)
+  logic [N_FU*ELEN-1:0] dimc_vreg_wdata;  // For DIMC results
+  logic dimc_write_active;  // Flag when DIMC is writing
 
-    if (spatz_req_valid && vl_q < spatz_req.vl)
-      // Request operands
-      vreg_r_req = {spatz_req.vd_is_src, spatz_req.use_vs1 && reduction_operand_request[1], spatz_req.use_vs2 && reduction_operand_request[0]};
-
-    // Got a new result
-    if (&(result_valid | ~pending_results) && !result_tag.reduction) begin
-      vreg_we  = !result_tag.wb;
-     
-      // ========== DIMC SPECIFIC LOGIC ==========
-      if (state_q == VFU_RunningDIMC && is_dimc_insn) begin
-        // For DIMC: generate byte enables based on element_sel field
-        vreg_wbe = '0; // Start with all bytes disabled
-      
-        // Enable only the 4 bytes for the selected 32-bit element
-        // current_element_idx selects which of the 8 elements (0-7) to write
-        if (current_element_idx < 8) begin  // Safety check
-          // Set 4 bits (32 bits = 4 bytes) at the calculated position
-          vreg_wbe[current_element_idx * 4 +: 4] = 4'b1111;
-        end
-      
-        // Debug output
-        $display("[DIMC] Writing to element %0d, wbe=0x%h", 
-                  current_element_idx, vreg_wbe);
-      end 
-      // ========== EXISTING LOGIC ==========
-      else if (result_tag.narrowing) begin
-        // Only write half of the elements
-        vreg_wbe = result_tag.narrowing_upper ? {{(N_FU*ELENB/2){1'b1}}, {(N_FU*ELENB/2){1'b0}}} : {{(N_FU*ELENB/2){1'b0}}, {(N_FU*ELENB/2){1'b1}}};
-      end
-      else begin
-       // Default: write all bytes
-       vreg_wbe = '1;
-      end
-    end
-
-    // Reduction finished execution
-    if (reduction_state_q == Reduction_WriteBack && result_valid[0]) begin
-      vreg_we = 1'b1;
-      unique case (spatz_req.vtype.vsew)
-        EW_8 : vreg_wbe = 1'h1;
-        EW_16: vreg_wbe = 2'h3;
-        EW_32: vreg_wbe = 4'hf;
-        default: if (MAXEW == EW_64) vreg_wbe = 8'hff;
-      endcase
-    end
-  end : operand_req_proc
-
-  logic [N_FU*ELEN-1:0] vreg_wdata;
+  // This block must stay - it handles narrowing for FPU/IPU
   always_comb begin: align_result
     vreg_wdata = result;
 
-    // Realign results
+    // Realign results for narrowing operations
     if (result_tag.narrowing) begin
       unique case (MAXEW)
         EW_64: begin
@@ -739,11 +749,113 @@ module spatz_vfu
     end
   end
 
+  assign current_element_idx = dimc_element_sel; // Direct from instruction
+  
+  always_comb begin : operand_req_proc
+    vreg_r_req = '0;
+    vreg_we    = '0;
+    vreg_wbe   = '0;
+    dimc_vreg_wdata = '0;
+    dimc_write_active = 1'b0;
+
+    if (spatz_req_valid && vl_q < spatz_req.vl)
+      // Request operands
+      vreg_r_req = {spatz_req.vd_is_src, spatz_req.use_vs1 && reduction_operand_request[1], spatz_req.use_vs2 && reduction_operand_request[0]};
+    
+      // ========== MACVV SPECIFIC VRF READS ==========
+      // OVERRIDE FOR MACVV LOADING IME
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV || macvv_instruction_active) begin
+      if (macvv_state_q == MACVV_LOAD_FEATURE) begin
+        vreg_r_req[1] = 1'b1;  // Read vs1 for features
+        vreg_r_req[0] = 1'b0;  // Read vs2 for kernels
+        vreg_r_req[2] = 1'b1;  // Read vd for psin
+      end
+      else if (macvv_state_q == MACVV_LOAD_KERNEL) begin
+        vreg_r_req[0] = 1'b1;  // Read vs2 for kernels
+        vreg_r_req[1] = 1'b0;  // Read vs1 for features
+      end
+    end
+
+    if (compute_pulse && spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS}) begin
+      if (dimc_loop_mode) begin
+        // align the address
+         vreg_r_req[2] = 1'b1;  // Read vd for psin
+        end
+    end
+
+    
+    // Got a new result
+    if (&(result_valid | ~pending_results) && !result_tag.reduction) begin
+      vreg_we  = !result_tag.wb;
+     
+      // ========== DIMC SPECIFIC LOGIC ==========
+      if (state_q == VFU_RunningDIMC && is_dimc_insn) begin
+         dimc_write_active = 1'b1;
+  
+        // ===== LOOP MODE BURST WRITE =====
+       if (burst_write && fifo_head_is_loop) begin
+          // Write 256-bit chunk to VRF (8×32-bit results)
+          vreg_we = 1'b1;
+  
+          // Extract correct chunk from buffer
+          dimc_vreg_wdata = dimc_buffer;
+          vreg_wbe = '1;  // Enable all 32 bytes (256 bits)
+        end 
+          // ===== SINGLE MODE WRITE =====
+        else if (!fifo_head_is_loop) begin  // FIX: Check both flags after !dimc_loop_mode && !dimc_loop_active
+          // SINGLE MODE: Original logic
+          vreg_wbe = '0;
+          // FIX: Use current_element_idx (which comes from FIFO head for single mode)
+          vreg_wbe[current_element_idx * 4 +: 4] = 4'b1111;
+          dimc_vreg_wdata = dimc_result_wide;
+        end
+      end
+      // ========== EXISTING LOGIC ==========
+      else if (result_tag.narrowing) begin
+        // Only write half of the elements
+        vreg_wbe = result_tag.narrowing_upper ? {{(N_FU*ELENB/2){1'b1}}, {(N_FU*ELENB/2){1'b0}}} : {{(N_FU*ELENB/2){1'b0}}, {(N_FU*ELENB/2){1'b1}}};
+      end
+      else begin
+        // Default: write all bytes
+        vreg_wbe = '1;
+      end
+    end
+
+    // Reduction finished execution
+    if (reduction_state_q == Reduction_WriteBack && result_valid[0]) begin
+      vreg_we = 1'b1;
+      unique case (spatz_req.vtype.vsew)
+        EW_8 : vreg_wbe = 1'h1;
+        EW_16: vreg_wbe = 2'h3;
+        EW_32: vreg_wbe = 4'hf;
+        default: if (MAXEW == EW_64) vreg_wbe = 8'hff;
+      endcase
+    end
+  
+    // ===== BURST WRITE ALSO HANDLED SEPARATELY =====
+    if (burst_write) begin
+      vreg_we = 1'b1;
+      dimc_write_active = 1'b1;
+      //dimc_vreg_wdata = dimc_buffer[vrf_chunk_idx * 256 +: 256];
+      dimc_vreg_wdata = dimc_buffer;
+      vreg_wbe = '1;
+    end
+  end : operand_req_proc
+
+  // MUX for VRF write data: DIMC overrides FU results
+  always_comb begin : vrf_wdata_mux
+    if (dimc_write_active) begin
+      vrf_wdata_o = dimc_vreg_wdata;
+    end else begin
+      // Use the result from align_result block (which already has narrowing handling)
+      vrf_wdata_o = vreg_wdata;
+    end
+  end
+
   // Register file signals
   assign vrf_re_o    = vreg_r_req;
   assign vrf_we_o    = vreg_we;
   assign vrf_wbe_o   = vreg_wbe;
-  assign vrf_wdata_o = vreg_wdata;
   assign vrf_id_o    = {result_tag.id, {3{spatz_req.id}}};
 
   //////////
@@ -1162,6 +1274,8 @@ module spatz_vfu
   logic        dimc_ready;
   logic [3:0]  dimc_result_4bit;
   logic [23:0] dimc_psout;
+  
+  
   logic        _COMPE;
   logic        _FCSN ;
   logic [1:0]  _MODE ;
@@ -1181,37 +1295,47 @@ module spatz_vfu
   logic _WEN;
   logic [255:0]_M;
   logic [7:0]_MCT;
-  logic compute_pulse;
   logic _select_F;
   logic _select_K;
   
   // DIMC element select from instruction
-  logic [2:0] dimc_element_sel;
-  logic [31:0] dimc_32bit_result;// Create 32-bit result from 24-bit PS output (zero-extend to 32-bit)
-  logic [N_FU*ELEN-1:0] dimc_result_wide;// Create 256-bit result with 32-bit element in correct position
- 
+
+  logic [31:0] dimc_32bit_result;// Create 32-bit result from 24-bit PS output (signed-extend to 32-bit)
+  
   // FIFO to track vd for in-flight DIMC computations
-  logic [7:0] dimc_vd_fifo [0:3];      // 4-entry FIFO (max 4 in-flight) vd+sel bits [7:5]=element_sel, bits [4:0]=vd
+  logic [8:0] dimc_vd_fifo [0:3];      // 4-entry FIFO (max 4 in-flight) vd+sel bits [7:5]=element_sel, bits [4:0]=vd after [8]   : is_loop
   logic [1:0] dimc_fifo_head;          // Read pointer
   logic [1:0] dimc_fifo_tail;          // Write pointer  
   logic [2:0] dimc_fifo_count;         // Number of entries in FIFO
 
-  // Store tags for each in-flight computation
- vfu_tag_t dimc_tag_fifo [0:3];
-
- // Combinational tag output
- vfu_tag_t dimc_result_tag_comb;
   
-  assign compute_pulse = spatz_req_valid && 
-                        ((spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DSS) ||
-                         (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DPS));
+  // Store tags for each in-flight computation
+  vfu_tag_t dimc_tag_fifo [0:3];
+  
 
+  assign dimc_loop_mode = spatz_req.use_vs1 && (spatz_req.vs1[0] == 1'b1);
+
+  assign compute_pulse = (spatz_req_valid && 
+                       ((spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DSS && result_counter < 29) ||
+                        (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DPS && result_counter < 29) ||
+                        (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV && macvv_state_q == MACVV_COMPUTE)));
+    
+  // MACVV loading active flag
+  assign macvv_loading_active = (macvv_state_q inside {MACVV_LOAD_FEATURE, MACVV_LOAD_KERNEL});
+
+  // Update _select_F and _select_K for MACVV
   assign _select_F = ~(spatz_req_valid && 
-                        (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_F)) ;
+                      ((spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_F) ||
+                       (macvv_instruction_active && macvv_state_q == MACVV_LOAD_FEATURE)));  // Added for MACVV IME 
 
   assign _select_K = ~(spatz_req_valid && 
-                        (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_K)) ;
+                      ((spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_K) ||
+                       (macvv_instruction_active && macvv_state_q == MACVV_LOAD_KERNEL)));   // Added for MACVV IME
+
   
+  assign fifo_head_is_loop = (dimc_fifo_count > 0) && dimc_vd_fifo[dimc_fifo_head][8]; //after
+
+
   // Use read port 0 for DIMC VRF access
   always_comb begin:DIMC_DECODE
     if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_LD_F) begin: gen_dimc_DL_F
@@ -1249,47 +1373,108 @@ module spatz_vfu
       assign _MCT    = 8'h00;  // No masking for kernel load
     end: gen_dimc_DL_K
     if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DPS) begin: gen_dimc_DPS
-      assign  _COMPE =compute_pulse;
-      assign  _FCSN  =1'b1;
-      assign  _MODE  =spatz_req.op_cfg.dimc.flags[1:0];
-      assign  _FA    ='x;
-      assign  _FD    ='x;
-      assign  _ADDIN =operand1[23:0];
-      assign  _D     =256'b0;
-      assign  _RA    ={spatz_req.op_cfg.dimc.k_row, spatz_req.op_cfg.dimc.sec};
-      assign  _WA    =7'bxx;
-      assign  _RCSN  =1'b0;
-      assign  _RCSN0 =1'b0;
-      assign  _RCSN1 =1'b0;
-      assign  _RCSN2 =1'b0;
-      assign  _RCSN3 =1'b0;
-      assign  _WCSN  =1'b1;
-      assign  _WEN   =1'b1;
+      assign  _COMPE = (comp_active && start_counter < 32) || compute_pulse;
+      assign  _MODE  = spatz_req.op_cfg.dimc.flags[1:0];
+      assign  _FA    = 'x;
+      assign  _FD    = 'x;
+      assign  _ADDIN = comp_active ?  '0:operand1[23:0];
+      assign  _D     = 256'b0;
+      assign  _RA    = comp_active ? {start_counter[4:0], spatz_req.op_cfg.dimc.sec} : 
+                                     {spatz_req.op_cfg.dimc.k_row, spatz_req.op_cfg.dimc.sec};
+      assign  _WA    = 7'bxx;
+      assign  _RCSN  = 1'b0;
+      assign  _RCSN0 = 1'b0;
+      assign  _RCSN1 = 1'b0;
+      assign  _RCSN2 = 1'b0;
+      assign  _RCSN3 = 1'b0;
+      assign  _WCSN  = 1'b1;
+      assign  _WEN   = 1'b1;
     end: gen_dimc_DPS
     if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_DSS) begin: gen_dimc_DSS
-      assign  _COMPE =compute_pulse;
-      assign  _FCSN  =1'b1;
-      assign  _MODE  =spatz_req.op_cfg.dimc.flags[1:0];
-      assign  _FA    ='x;
-      assign  _FD    ='x;
-      assign  _ADDIN =operand1[23:0];
-      assign  _D     =256'b0;
-      assign  _RA    ={spatz_req.op_cfg.dimc.k_row, spatz_req.op_cfg.dimc.sec};
-      assign  _WA    =7'bxx;
-      assign  _RCSN  =1'b0;
-      assign  _RCSN0 =1'b0;
-      assign  _RCSN1 =1'b0;
-      assign  _RCSN2 =1'b0;
-      assign  _RCSN3 =1'b0;
-      assign  _WCSN  =1'b1;
-      assign  _WEN   =1'b1;
+      assign  _COMPE = (comp_active && start_counter < 32) || compute_pulse;
+      assign  _MODE  = spatz_req.op_cfg.dimc.flags[1:0];
+      assign  _FA    = 'x;
+      assign  _FD    = 'x;
+      assign  _ADDIN = comp_active ? dimc_buffer_psin_2[psin_buffer_idx * 32 +: 24]:(spatz_req.vs1[1] ? operand3[23:0] : 24'b0); //comp_active ?  '0:operand1[23:0]; //operand1[23:0] due to loop
+      assign  _D     = 256'b0;
+      assign  _RA    = comp_active ? {start_counter[4:0], spatz_req.op_cfg.dimc.sec} : 
+                                     {spatz_req.op_cfg.dimc.k_row, spatz_req.op_cfg.dimc.sec};
+      assign  _WA    = 7'bxx;
+      assign  _RCSN  = 1'b0;
+      assign  _RCSN0 = 1'b0;
+      assign  _RCSN1 = 1'b0;
+      assign  _RCSN2 = 1'b0;
+      assign  _RCSN3 = 1'b0;
+      assign  _WCSN  = 1'b1;
+      assign  _WEN   = 1'b1;
     end: gen_dimc_DSS
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV) begin: gen_dimc_MACVV
+      // Use funct7 for mode (from instruction decode)
+      assign  _MODE  = spatz_req.op_cfg.dimc.mode[1:0];  // funct7[1:0] for mode
+  
+      if (macvv_state_d == MACVV_LOAD_FEATURE) begin
+        assign  _COMPE =1'b0;
+        assign  _FCSN  =_select_F;
+        assign  _MODE  = 2'b00;
+        assign  _FA    =macvv_feature_load_count[0]; //when VLEN of VRF 1024 [1:0] to fill all 4 sec
+        assign  _FD    =vrf_rdata_i[1];
+        assign  _D     =0;
+        assign  _WA    =7'bxx;
+        assign  _RCSN  =1'b1;
+        assign  _RCSN0 =1'b1;
+        assign  _RCSN1 =1'b1;
+        assign  _RCSN2 =1'b1;
+        assign  _RCSN3 =1'b1;
+        assign  _WCSN  =1'b1;
+        assign  _WEN   =1'b1;
+      end
+      // Kernel loading phase 
+      else if (macvv_state_d == MACVV_LOAD_KERNEL) begin
+        assign  _COMPE =1'b0;
+        assign  _FCSN  =1'b1;
+        assign  _MODE  =2'b00;
+        assign  _FA    ='x;
+        assign  _FD    ='0;
+        assign  _D     =vrf_rdata_i[0];
+        assign  _WA    ={macvv_kernel_load_count[3:1], 1'b0 ,macvv_kernel_load_count[0]}; //when VLEN of VRF 1024 macvv_kernel_load_count[4:2], macvv_kernel_load_count[1:0] to fill all 4 sec
+        assign  _RCSN  =1'b1;
+        assign  _RCSN0 =1'b1;
+        assign  _RCSN1 =1'b1;
+        assign  _RCSN2 =1'b1;
+        assign  _RCSN3 =1'b1;
+        assign  _WCSN  =_select_K;
+        assign  _WEN   =_select_K;  
+        assign _M      =   '1;  // ? CRITICAL: Enable all bits for writing
+        assign _MCT    = 8'h00;  // No masking for kernel load
+      end
+      // Compute phase 
+      else if (macvv_state_d ==  MACVV_COMPUTE) begin
+        assign  _COMPE = (comp_active && start_counter < 8); //|| compute_pulse
+        assign  _MODE  = spatz_req.op_cfg.dimc.mode[1:0];
+        assign  _FA    = 'x;
+        assign  _FD    = 'x;
+        assign  _ADDIN = dimc_buffer_psin[psin_buffer_idx * 32 +: 24]; //operand1[23:0] due to loop comp_active ?  dimc_buffer_psin[psin_buffer_idx * 32 +: 24]:operand1[23:0]
+        assign  _D     = 256'b0;
+        assign  _RA    = {macvv_compute_counter[2:0],2'b00};  // row[2:0], sec=0                 
+        assign  _WA    = 7'bxx;
+        assign  _RCSN  = 1'b0;
+        assign  _RCSN0 = 1'b0;
+        assign  _RCSN1 = 1'b0;
+        assign  _RCSN2 = 1'b0;
+        assign  _RCSN3 = 1'b0;
+        assign  _WCSN  = 1'b1;
+        assign  _WEN   = 1'b1;
+      end
+      else if (macvv_state_q ==  MACVV_WRITE_RESULTS) begin
+        assign  _COMPE = 0;
+      end
+    end: gen_dimc_MACVV
   end:DIMC_DECODE
 
   // DIMC instance
   DIMC_18_fixed #(
     .SECTION_WIDTH(SECTION_WIDTH)
-  )i_dimc (
+  ) i_dimc (
     .RCK(clk_i),                                                    // Main clock
     .RESETn(rst_ni),                                                // Active-low reset
     .READYN(dimc_ready),                                            // Active-low ready (output valid)
@@ -1317,125 +1502,338 @@ module spatz_vfu
     .M(_M),                                                         // Bitwise write mask (unused)
     .MCT(_MCT)                                                        // Masking coding thermometric (unused)
   );
+  
+  //--------------
+  // MACVV FSM IME
+  //--------------
+  
+  // MACVV FSM IME
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      macvv_state_q <= MACVV_IDLE;
+      macvv_feature_load_count <= '0;
+      macvv_kernel_load_count <= '0;
+      macvv_compute_counter <= '0;
+      macvv_result_counter <= '0;
+    end else begin
+      macvv_state_q <= macvv_state_d;
+    
+      // Update counters
+      if (macvv_state_d == MACVV_LOAD_FEATURE && vrf_rvalid_i[1]) begin
+        macvv_feature_load_count <= macvv_feature_load_count + 1;
+      end else if (macvv_state_d == MACVV_LOAD_KERNEL && vrf_rvalid_i[0]) begin
+        macvv_kernel_load_count <= macvv_kernel_load_count + 1;
+      end else if (macvv_state_d == MACVV_COMPUTE && start_counter < 8) begin
+        macvv_compute_counter <= start_counter[3:0];  // Track from global counter
+      end
+      
+      // Reset counters on state exit
+      if (macvv_state_q != MACVV_LOAD_FEATURE) macvv_feature_load_count <= '0;
+      if (macvv_state_q != MACVV_LOAD_KERNEL) macvv_kernel_load_count <= '0;
+      if (macvv_state_q != MACVV_COMPUTE) macvv_compute_counter <= '0;
+      if (macvv_state_q != MACVV_WRITE_RESULTS) macvv_result_counter <= '0;
+      // Control the persistent flag
+      // Set when MACVV instruction arrives and we push to FIFO
+      if (spatz_req_valid && spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV && 
+        !running_q[spatz_req.id]) begin
+      macvv_instruction_active <= 1'b1;
+      end
+      // Clear when MACVV completes
+      else if (macvv_state_q == MACVV_WRITE_RESULTS && 
+               vrf_wvalid_i && burst_write) begin
+        macvv_instruction_active <= 1'b0;
+      end
+    end
+  end
+
+  // MACVV FSM combinational IME
+  always_comb begin
+    macvv_state_d = macvv_state_q;
+  
+    if (spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV || macvv_instruction_active) begin //spatz_req_valid && spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV
+      unique case (macvv_state_q)
+        MACVV_IDLE: begin
+          if (operands_ready) begin
+           macvv_state_d = MACVV_LOAD_FEATURE;
+          end
+        end
+      
+        MACVV_LOAD_FEATURE: begin
+          if (vrf_rvalid_i[1] && macvv_feature_load_count == 2) begin  // 4 loads macvv_feature_load_count == 4 VLEN 1024
+           macvv_state_d = MACVV_LOAD_KERNEL;
+          end
+        end
+      
+        MACVV_LOAD_KERNEL: begin
+          if (vrf_rvalid_i[0] && macvv_kernel_load_count == 16) begin  //  32 loads macvv_kernel_load_count == 32 VLEN 1024
+            macvv_state_d = MACVV_COMPUTE;
+          end
+        end
+      
+        MACVV_COMPUTE: begin
+          if (macvv_compute_counter == 7) begin //important add after FIFO MACVV IME && ! 
+            macvv_state_d = MACVV_WRITE_RESULTS;
+          end
+        end
+      
+        MACVV_WRITE_RESULTS: begin
+          if (vrf_wvalid_i && burst_write) begin
+            macvv_state_d = MACVV_IDLE;
+          end
+        end
+      
+        default: macvv_state_d = MACVV_IDLE;
+      endcase
+    end else begin
+      macvv_state_d = MACVV_IDLE;
+    end
+  end
 
   // ========== DIMC RESULT HANDLING ==========
 
   // Calculate which 32-bit element to write (0-7 for 256-bit register)
-  assign current_element_idx = dimc_element_sel; // Direct from instruction
+  // FIX: Use delayed element_sel from FIFO for single mode
+  assign dimc_element_sel = (dimc_fifo_count > 0 && !fifo_head_is_loop) ? 
+                          dimc_vd_fifo[dimc_fifo_head][7:5] :  // Delayed from FIFO for single mode
+                          spatz_req.op_cfg.dimc.flags[4:2];    // Extract from immediate (for initial/burst mode)
+
   assign dimc_in_ready = {N_FU*ELENB{~dimc_ready}};
   assign dimc_result_valid = {N_FU*ELENB{~dimc_ready}};
-  assign dimc_32bit_result = {8'b0, dimc_psout}; // Zero-extend to 32-bit
- 
- always_comb begin
-  dimc_result_wide = '0;
-  // Place 32-bit result at element position specified by instruction
-  // Each element is 32 bits, so multiply by 32
-  dimc_result_wide[current_element_idx * 32 +: 32] = dimc_32bit_result;
- end
+  assign dimc_32bit_result = {{8{dimc_psout[23]}}, dimc_psout}; // signed-extend to 32-bit
 
- assign dimc_result = dimc_result_wide;
-  
+  always_comb begin
+    dimc_result_wide = '0;
+    // Place 32-bit result at element position specified by instruction
+    // FIX: Always use dimc_element_sel for positioning
+    dimc_result_wide[dimc_element_sel * 32 +: 32] = dimc_32bit_result;
+  end
+
+  assign dimc_result = dimc_result_wide;
+
   // DIMC busy signal
-  assign is_dimc_busy = (state_q == VFU_RunningDIMC) && ~dimc_ready;
- 
- //----------  
- // FIFO to track vd and wbe for in-flight DIMC computations
- //-----------
- assign dimc_element_sel = (dimc_fifo_count > 0 && !dimc_ready) ? 
-                         dimc_vd_fifo[dimc_fifo_head][7:5] :  // Delayed from FIFO
-                         spatz_req.op_cfg.dimc.flags[4:2];    // spatz_req.op_cfg.dimc.flags[4:2]; Extract from immediate
+  assign is_dimc_busy = (state_q == VFU_RunningDIMC) && (~dimc_ready ||             // DIMC computing we change q to d
+                      dimc_loop_active ||        // Loop mode active
+                      macvv_loading_active ||    // MACVV loading macvv_instruction_active reset
+                      macvv_state_q != MACVV_IDLE); // Any MACVV state; IME
+
+  vrf_addr_t base_addr;
+  vrf_addr_t chunk_offset;
+
+  // Combinational tag calculation
+  always_comb begin
+    if (dimc_fifo_count > 0) begin
+      // FIX: Always use FIFO for tag in DIMC state
+      dimc_result_tag = dimc_tag_fifo[dimc_fifo_head];
+      // Override for loop mode burst writes
+      if (dimc_loop_active) begin
   
- // Override the result_tag assignment to use combinational path
- assign result_tag = (state_q == VFU_RunningDIMC) ? dimc_result_tag_comb : 
-                   (state_q == VFU_RunningIPU) ? ipu_result_tag : 
-                   fpu_result_tag;
-
- // Tag is always available from FIFO head
- assign dimc_result_tag_comb = (dimc_fifo_count > 0) ? 
-                             dimc_tag_fifo[dimc_fifo_head] : input_tag;
-
- always_ff @(posedge clk_i or negedge rst_ni) begin
-  if (!rst_ni) begin
-    // Initialize
-    dimc_result_tag <= '0;
-    for (int i = 0; i < 4; i++) begin
-      dimc_vd_fifo[i] <= '0;
-      dimc_tag_fifo[i] <= '0;
+        base_addr = dimc_tag_fifo[dimc_fifo_head].vd_addr;
+        chunk_offset = vrf_chunk_idx << $clog2(NrWordsPerVector);
+        dimc_result_tag.vd_addr = base_addr + chunk_offset/2;    
+ 
+      end
+    end else begin
+      dimc_result_tag = input_tag;
     end
-    dimc_fifo_head <= '0;
-    dimc_fifo_tail <= '0;
-    dimc_fifo_count <= '0;
-  end else begin
-    // ===== FIFO WRITE =====
-    // When DSS/DPS computation starts
-    if (compute_pulse && state_q == VFU_RunningDIMC && 
-        spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS} &&
-        dimc_fifo_count < 4) begin
-      
-      // Push to FIFO
-      dimc_vd_fifo[dimc_fifo_tail] <= {spatz_req.op_cfg.dimc.flags[4:2], spatz_req.vd};
-      //                               element_sel[2:0]                 vd[4:0]  spatz_req.vd;
-      dimc_tag_fifo[dimc_fifo_tail] <= input_tag;
-      dimc_fifo_tail <= dimc_fifo_tail + 1;
-      dimc_fifo_count <= dimc_fifo_count + 1;
-      
-      $display("[DIMC FIFO] Time %t: PUSH: vd_reg=%0d (tail=%0d, count=%0d)", 
-                $time, spatz_req.vd, dimc_fifo_tail, dimc_fifo_count + 1);
-    end
-    
-    // ===== POP WHEN RESULT ARRIVES =====
-    // When DIMC result is ready
-    if (!dimc_ready && dimc_fifo_count > 0) begin
+  end
 
-      // Extract vd and element_sel before popping updated
-      automatic logic [4:0] current_vd = dimc_vd_fifo[dimc_fifo_head][4:0];
-      automatic logic [2:0] current_element_sel = dimc_vd_fifo[dimc_fifo_head][7:5];
-      
-      // Update vd address for tag
-      dimc_tag_fifo[dimc_fifo_head].vd_addr <= 
-        current_vd << $clog2(NrWordsPerVector);
+  // FIX: Simplify result tag selection
+  assign result_tag = (state_q == VFU_RunningIPU) ? ipu_result_tag :
+                     (state_q == VFU_RunningFPU) ? fpu_result_tag :
+                     dimc_result_tag;
 
-      // Also update the current element selector for the write
-      // This gets used by the element selection logic
-      //delayed_element_sel <= current_element_sel;
-      // Pop from FIFO
-
-      dimc_fifo_head <= dimc_fifo_head + 1;
-      dimc_fifo_count <= dimc_fifo_count - 1;
-      
-      $display("[DIMC FIFO] Time %t: POP: vd_reg=%0d (result ready)",
-               $time, dimc_vd_fifo[dimc_fifo_head]);
-    end
-    
-    // ===== UPDATE REGISTERED TAG =====
-    // Keep registered version in sync
-    dimc_result_tag <= dimc_result_tag_comb;
-    
-    // ===== RESET FOR LD_F/LD_K =====
-    if (state_q == VFU_RunningDIMC && 
-        spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_LD_F, DIMC_CMD_LD_K}) begin
-      // Clear FIFO
+    //----------------
+    // FIFO management
+    //----------------
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      // Initialize
+      for (int i = 0; i < 4; i++) begin
+        dimc_vd_fifo[i] <= '0;
+        dimc_tag_fifo[i] <= '0;
+      end
       dimc_fifo_head <= '0;
       dimc_fifo_tail <= '0;
       dimc_fifo_count <= '0;
+      
+      // Loop mode controls
+      start_counter <= '0;
+      result_counter <= '0;
+      comp_active <= 1'b0;
+      dimc_loop_active <= 1'b0;
+      dimc_buffer <= '0;
+      dimc_buffer_psin <= '0;
+      buffer_idx <= '0;
+      psin_buffer_idx <= '0;
+      vrf_chunk_idx <= '0;
+      psin_chunk_idx <= '0;
+      psin_write <= 1'b0;
+      burst_write <= 1'b0;
+    end else begin
+      // ===== COMPUTATION START CONTROL =====
+       // --- DSS/DPS LOGIC ---
+      if (compute_pulse && dimc_loop_mode && spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS}) begin
+        // Start 32-computation sequence
+        start_counter <= 6'd0;
+        comp_active <= 1'b1;
+        result_counter <= '0;
+        buffer_idx <= '0;
+        psin_buffer_idx <= '0;
+        vrf_chunk_idx <= '0;
+        burst_write <= 1'b0;
+        dimc_loop_active <= 1'b1;
+        psin_chunk_idx <= '0;
+        psin_write <= 1'b0;
+        
+        // Push to FIFO once for the entire sequence
+        if (dimc_fifo_count < 4) begin
+          dimc_vd_fifo[dimc_fifo_tail] <= {dimc_loop_mode, spatz_req.op_cfg.dimc.flags[4:2], spatz_req.vd};
+          dimc_tag_fifo[dimc_fifo_tail] <= input_tag;
+          dimc_fifo_tail <= dimc_fifo_tail + 1;
+          dimc_fifo_count <= dimc_fifo_count + 1;
+        end
+      end 
+      // FIX: Handle DPS/DSS single mode FIFO push
+      else if (compute_pulse && !dimc_loop_mode && spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS}) begin
+        // Single mode: push to FIFO for each computation
+        if (dimc_fifo_count < 4) begin
+          dimc_vd_fifo[dimc_fifo_tail] <= {dimc_loop_mode, spatz_req.op_cfg.dimc.flags[4:2], spatz_req.vd};
+          dimc_tag_fifo[dimc_fifo_tail] <= input_tag;
+          dimc_fifo_tail <= dimc_fifo_tail + 1;
+          dimc_fifo_count <= dimc_fifo_count + 1;
+        end
+      end
+      // MACVV instruction arrival
+      else if (spatz_req_valid && spatz_req.op_cfg.dimc.cmd == DIMC_CMD_MACVV && 
+               !running_q[spatz_req.id]) begin
+        // Push MACVV to FIFO immediately (like DSS/DPS)
+        if (dimc_fifo_count < 4) begin
+          // Store as loop mode (bit 8 = 1) because MACVV has multiple phases
+          dimc_vd_fifo[dimc_fifo_tail] <= {1'b1, spatz_req.op_cfg.dimc.flags[4:2], spatz_req.vd};
+          dimc_tag_fifo[dimc_fifo_tail] <= input_tag;
+          dimc_fifo_tail <= dimc_fifo_tail + 1;
+          dimc_fifo_count <= dimc_fifo_count + 1;
+        end
+      end
+
+      if (macvv_state_q == MACVV_LOAD_FEATURE && vrf_rvalid_i[2]) begin
+        if(spatz_req.op_cfg.dimc.mode[3] == 1) 
+          dimc_buffer_psin <= vrf_rdata_i[2];
+        else 
+          dimc_buffer_psin <= '0;
+      end
+
+        // ===== START MACVV COMPUTE PHASE =====
+        // Only start compute when loading is done and in COMPUTE state
+      if (macvv_instruction_active && macvv_state_q == MACVV_COMPUTE && !comp_active) begin //add with the implementation of flag 
+        start_counter <= 6'd0;
+        comp_active <= 1'b1;
+        result_counter <= '0;
+        buffer_idx <= '0;
+        psin_buffer_idx <= '0;
+        dimc_loop_active <= 1'b1;
+      end
+    
+    if (comp_active) begin
+      // MACVV uses 8 computations (0-7), others use 32 (0-31)
+      if (macvv_instruction_active) begin
+          // MACVV: 8 computations
+          if (start_counter < 7) begin
+              start_counter <= start_counter + 1;
+              psin_buffer_idx <= psin_buffer_idx + 1; 
+          end 
+      end else begin
+          // DSS/DPS: 32 computations  
+          if (start_counter < 31) begin
+              start_counter <= start_counter + 1;
+            //  psin_buffer_idx <= psin_buffer_idx + 1; //U
+          end else begin
+              comp_active <= 1'b0;
+              //start_counter <= 1'b0;
+          end
+      end
+    end
+    if (compute_pulse && spatz_req.op_cfg.dimc.cmd inside {DIMC_CMD_DSS, DIMC_CMD_DPS}) begin
+      // MACVV uses 8 computations (0-7), others use 32 (0-31)
+      if (dimc_loop_mode) begin
+          // DSS/DPS: 32 computations  
+          if (start_counter < 31) begin
+              psin_buffer_idx <= psin_buffer_idx + 1; //U
+          end
+
+          if (!comp_active && psin_buffer_idx == 3'b000) begin
+            psin_write <= 1'b1;
+          end else if(start_counter < 8 && psin_buffer_idx == 3'b111) begin
+            psin_chunk_idx <= psin_chunk_idx + 1;
+            psin_write <= 1'b1;
+          end else if (start_counter < 16 && psin_buffer_idx == 3'b111) begin
+            psin_chunk_idx <= psin_chunk_idx + 2;
+            psin_write <= 1'b1;
+          end else if (start_counter < 24 && psin_buffer_idx == 3'b111) begin
+            psin_chunk_idx <= psin_chunk_idx + 3;
+            psin_write <= 1'b1;
+          end else if (start_counter < 32 && psin_buffer_idx == 3'b111) begin
+            psin_chunk_idx <= psin_chunk_idx + 4;
+            psin_write <= 1'b1;
+          end 
+      end
+    end
+    
+      // ===== RESULT PROCESSING =====
+      if (!dimc_ready && fifo_head_is_loop) begin //added after dimc_loop_active && start_counter > 3'd2
+        // Store each 32-bit result in buffer
+        dimc_buffer[{buffer_idx, 5'b0} +: 32] <= dimc_32bit_result;
+        buffer_idx <= buffer_idx + 1;
+        result_counter <= result_counter + 1;
+        
+          // Check if all 32 results received
+          // Check if all results received
+        if (macvv_instruction_active && result_counter == 6'd7) begin
+          // MACVV: 8 results done
+          dimc_loop_active <= 1'b0;
+          comp_active <= 1'b0;
+          burst_write <= 1'b1;  // Trigger write of 8 results
+          vrf_chunk_idx <= 0;   // Only one chunk for MACVV
+          start_counter <= 0;
+          
+          // Pop from FIFO
+          if (dimc_fifo_count > 0) begin
+            dimc_fifo_head <= dimc_fifo_head + 1;
+            dimc_fifo_count <= dimc_fifo_count - 1;
+          end
+        end
+        else if (result_counter == 6'd32) begin //imp IME (macvv_state_d == MACVV_COMPUTE ? 6'd8 : 6'd32)/6'd32
+          dimc_loop_active <= 1'b0;
+          result_counter <= 1'b0; 
+          // Pop from FIFO when done
+          if (dimc_fifo_count > 0) begin
+            dimc_fifo_head <= dimc_fifo_head + 1;
+            dimc_fifo_count <= dimc_fifo_count - 1;
+          end
+        end
+      end
+
+      // ===== SINGLE MODE: FIFO POP =====
+      // FIX: Pop FIFO when result is ready in single mode
+      if (!dimc_ready && dimc_fifo_count > 0 && !fifo_head_is_loop) begin // after && !dimc_loop_mode && !dimc_loop_active
+        dimc_fifo_head <= dimc_fifo_head + 1;
+        dimc_fifo_count <= dimc_fifo_count - 1;
+      end
+      
+      // ===== BURST WRITE TRIGGER =====
+      // Trigger after every 8th result (cycles 11, 19, 27, 35)
+      burst_write <= 1'b0;
+      if (!dimc_ready && dimc_loop_active && result_counter[2:0] == 3'b111) begin
+        burst_write <= 1'b1;
+        buffer_idx <= 1'b0; //8 result buffer 
+        vrf_chunk_idx <= result_counter[4:3];  // Which chunk (0-3)
+      end
     end
   end
- end
- // DEBUG: Track DIMC ready signal and actual writes
- always @(posedge clk_i) begin
-  static logic dimc_ready_last = 1'b1;
-
-  // Track dimc_ready changes
-  if (dimc_ready != dimc_ready_last) begin
-    $display("[DIMC READY] Time %0t: %0b -> %0b", $time, dimc_ready_last, dimc_ready);
-    dimc_ready_last <= dimc_ready;
-  end
- end
 
   // DIMC outputs
   assign dimc_psout_o   = dimc_psout;
   assign dimc_sout_o    = dimc_result_4bit[0];
   assign dimc_res_out_o = dimc_result_4bit[3:1];
-  //assign vrf_wdata_o    = _Q;
 
 endmodule : spatz_vfu

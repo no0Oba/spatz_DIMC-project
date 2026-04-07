@@ -94,8 +94,8 @@ logic [3:0] result_4bit;
 
 // Control signal assignments
 assign compute_trigger = COMPE & ~RCSN & ~RCSN0 & ~RCSN1 & ~RCSN2 & ~RCSN3;
-assign mem_read_en = ~COMPE & ~RCSN;
-assign mem_write_en = ~COMPE & ~WCSN & ~WEN;
+assign mem_read_en     = ~COMPE & ~RCSN;
+assign mem_write_en    = ~COMPE & ~WCSN & ~WEN;
 //assign WCK = RCK;  // Write clock tied to main clock
 
 // Valid bits calculation
@@ -310,7 +310,7 @@ always_ff @(posedge RCK or negedge RESETn) begin
         pipeline_valid[3] <= pipeline_valid[2];
         pipeline_row[3]   <= pipeline_row[2];
         
-        if (pipeline_valid[2]) begin
+        if (pipeline_valid[2]) begin 
             PSOUT <= psum;
             SOUT <= result_4bit[0];
             RES_OUT <= result_4bit[3:1];

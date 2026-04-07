@@ -340,7 +340,29 @@ module spatz import spatz_pkg::*; import rvv_pkg::*; import fpnew_pkg::*; #(
     .spatz_mem_finished_o    (spatz_mem_finished                                   ),
     .spatz_mem_str_finished_o(spatz_mem_str_finished                               )
   );
-
+  /*
+  // =====================================================
+  // SIMPLE VRF WRITE MONITOR (SPATZ LEVEL, HART FILTERED)
+  // =====================================================
+  `ifndef SYNTHESIS
+    always_ff @(posedge clk_i) begin
+      if (rst_ni && hart_id_i == 0) begin
+        for (int port = 0; port < NrWritePorts; port++) begin
+          if (vrf_we[port] && vrf_wbe[port] != '0 && !$isunknown(vrf_waddr[port])) begin
+            $display(
+            "[VRF_WRITE] Time=%0t | Port=%0d | Addr=v%0d | Data=0x%h | WBE=0x%h",
+            $time,
+            port,
+            vrf_waddr[port],
+            vrf_wdata[port],
+            vrf_wbe[port]
+            );
+          end
+        end
+      end
+    end
+  `endif
+ */
   ///////////
   // VSLDU //
   ///////////

@@ -111,7 +111,7 @@ A Digital In-Memory Compute (DIMC) accelerator has been tightly integrated into 
 The system uses a feature buffer and kernel memory to stream data efficiently into the DIMC, supporting a 2D tiled, weight-stationary compute model for matrix-vector multiplication. The DIMC performs bitwise and popcount-based operations, enabling efficient low-precision computation (1–8 bits) directly within memory, significantly reducing data movement overhead.
 
 
-![DIMC Integration scheme](.docs/fig/Integration_scheme.png)
+![DIMC Integration scheme](./docs/fig/Integration_scheme.png)
 
 To control data flow and computation, **custom ISA extensions (DLF, DLK, DSS)** are introduced alongside **Integrated Matrix Extension (IME)** instructions, enabling structured phases of **load → compute → write-back**. This aligns well with DIMC’s execution model and improves programmability compared to standalone accelerators. The integration is tightly coupled within the Vector Arithmetic Unit (VAU), allowing shared access to the vector register file (VRF) and maintaining a single instruction stream, which maximizes resource utilization and throughput.
 

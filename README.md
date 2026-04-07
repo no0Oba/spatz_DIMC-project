@@ -113,16 +113,23 @@ The system uses a feature buffer and kernel memory to stream data efficiently in
 ### Integration Details
 
 
-![DIMC Integration](./docs/fig/dimc_integration.png)
+![DIMC Integration](.docs/fig/Integration_scheme.png)
 
-To control data flow and computation, custom ISA extensions (DLF, DLK, DSS) are introduced alongside Integrated Matrix Extension (IME) instructions, enabling structured phases of load → compute → write-back. This aligns well with DIMC’s execution model and improves programmability compared to standalone accelerators. The integration is tightly coupled within the Vector Arithmetic Unit (VAU), allowing shared access to the vector register file (VRF) and maintaining a single instruction stream, which maximizes resource utilization and throughput.
+To control data flow and computation, **custom ISA extensions (DLF, DLK, DSS)** are introduced alongside **Integrated Matrix Extension (IME)** instructions, enabling structured phases of **load → compute → write-back**. This aligns well with DIMC’s execution model and improves programmability compared to standalone accelerators. The integration is tightly coupled within the Vector Arithmetic Unit (VAU), allowing shared access to the vector register file (VRF) and maintaining a single instruction stream, which maximizes resource utilization and throughput.
+
+![DIMC Integration](./docs/fig/dimc_integration.png)
 
  DIMC integration ensures **synchronized computation** with Spatz's pipeline, maintaining high throughput across multiple vector functional units (VAUs).
 - The module interacts with Spatz cores in a way similar to a **peripheral or accelerator**, emulating a soft peripheral interface.
 - Extensive verification has been performed to ensure correct **data flow, timing, and output encoding** for all supported operations.
 
 ### Benefits
+Experimental results show that:
 
+Custom instructions achieve up to **4× speedup over the baseline SPATZ processor**
+IME-based execution provides portability but suffers from lower efficiency due to underutilization
+Current implementation achieves **~25–30% of DIMC peak performance**, indicating significant room for optimization
+Overall, this work demonstrates a scalable and programmable approach to integrating in-memory computing accelerators into RISC-V systems, balancing performance, flexibility, and architectural efficiency.
 - Offloads computation from the Spatz core, freeing resources for other tasks.
 - Reduces memory bottlenecks by performing computation close to the data.
 - Demonstrates a scalable approach to integrating specialized accelerators into RISC-V cores.

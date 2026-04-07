@@ -105,15 +105,13 @@ Each Spatz has three functional units:
 
 The most up-to-date list of supported vector instructions can be found in `sw/riscvTests/CMakeLists.txt`. Spatz does not yet understand vector masking (although this is a work in progress), or fixed-point computation. It also does not understand many of the shuffling and permutation instructions of RVV (e.g., `vrgather`), and users are asked to shuffle data in memory through indexed memory operations. We very much welcome contributions that expand Spatz' capabilities as a vector coprocessor!
 
-DIMC Integration with SPATZ (Updated Summary)
-
+### DIMC Integration Details
 A Digital In-Memory Compute (DIMC) accelerator has been tightly integrated into the SPATZ RISC-V vector processor to accelerate matrix-vector operations common in AI workloads. The integration embeds DIMC as a native functional unit within the vector architecture, leveraging RISC-V Matrix ISA extensions and custom instructions to enable efficient programmability and high-throughput execution.
 
 The system uses a feature buffer and kernel memory to stream data efficiently into the DIMC, supporting a 2D tiled, weight-stationary compute model for matrix-vector multiplication. The DIMC performs bitwise and popcount-based operations, enabling efficient low-precision computation (1–8 bits) directly within memory, significantly reducing data movement overhead.
-### Integration Details
 
 
-![DIMC Integration](.docs/fig/Integration_scheme.png)
+![DIMC Integration scheme](.docs/fig/Integration_scheme.png)
 
 To control data flow and computation, **custom ISA extensions (DLF, DLK, DSS)** are introduced alongside **Integrated Matrix Extension (IME)** instructions, enabling structured phases of **load → compute → write-back**. This aligns well with DIMC’s execution model and improves programmability compared to standalone accelerators. The integration is tightly coupled within the Vector Arithmetic Unit (VAU), allowing shared access to the vector register file (VRF) and maintaining a single instruction stream, which maximizes resource utilization and throughput.
 
